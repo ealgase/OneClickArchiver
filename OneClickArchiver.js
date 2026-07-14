@@ -45,11 +45,19 @@ function swapInDates(inputString, thisMonthNum, thisYear){
 		.replace( /\%\(quarter\)s/g, thisQuarter );
 }
 
+function determinePageArchivability(){
+    const categories = config.wgCategories;
+    const noManualArchivingCategoryName = 'Pages that should not be manually archived';
+    const nonTalkSignedCategoryName = 'Non-talk pages that are automatically signed';
+
+    if (categories.includes(noManualArchivingCategoryName)) return false; // manual archiving disabled
+    if (categories.includes(nonTalkSignedCategoryName)) return true; // category for talk-like pages
+    if (Boolean(document.querySelector( '#ca-addsection' ))) return true; // only present on talkpages
+    return false // fallback
+}
+
 $( document ).ready( function () {
-	if ( ( $( '#ca-addsection' ).length > 0 ||
-		$.inArray( 'Non-talk pages that are automatically signed', config.wgCategories )  >= 0 ) &&
-		config.wgAction === 'view' &&
-		$.inArray( 'Pages that should not be manually archived', config.wgCategories ) === -1 ) {
+	if ( determinePageArchivability() ) {
 		var OCAstate = mw.user.options.get( 'userjs-OCA-enabled', 'true' );
 		var pageid = config.wgArticleId;
 		var errorLog = { errorCount: 0 };
