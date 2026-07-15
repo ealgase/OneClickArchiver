@@ -5,7 +5,139 @@
  * [3] < https://en.wikipedia.org/wiki/User:Equazcion/OneClickArchiver.js >
  */
 // <nowiki>
-mw.loader.using(['mediawiki.util', 'mediawiki.api'], function() {
+
+// configuration and i18n
+i18n_archive_link_text = 'Archive';
+i18n_archive_to_text = 'Archive to:';
+
+if (!window.OCALinkSize){
+	linkSize = 0.6;
+} else{
+	linkSize = window.OCALinkSize;
+}
+
+// utility functions
+// these are all purely functional
+function findTemplateInPageRaw(pageText, templateName){
+    const escapedName = templateName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    // parsing a CFL with a regex is nasty, but you gotta do what you gotta do
+    const templateRegex = new RegExp(
+        `(\\{\\{\\s*${escapedName}\\s*\\|)((?:[^{}]|\\{\\{(?:[^{}]|\\{\\{[^{}]*\\}\\})*\\}\\})*)(\\}\\})`, 
+        'i'
+    );
+
+    const match = pageText.match(templateRegex);
+    
+    if (!match) {
+        return null; // couldn't parse
+    }
+
+    return match;
+}
+
+function findTemplateInPage(pageText, templateName){
+    const match = findTemplateInPageRaw(pageText, templateName);
+    if (!match) return null;
+    return match[2];
+}
+
+function parseTemplateParamsRaw(inputTemplateString) {
+    const params = [];
+    let currentParam = '';
+    let braceDepth = 0;
+
+    // this is also much uglier because it handles nesting. oh well
+    for (let i = 0; i < inputTemplateString.length; i++) {
+        const char = inputTemplateString[i];
+        
+        if (char === '{' && inputTemplateString[i + 1] === '{') {
+            braceDepth++;
+            currentParam += '{{';
+            i++; // skip next brace
+        } else if (char === '}' && inputTemplateString[i + 1] === '}') {
+            braceDepth--;
+            currentParam += '}}';
+            i++; // skip next brace
+        } else if (char === '|' && braceDepth === 0) {
+            params.push(currentParam);
+            currentParam = '';
+        } else {
+            currentParam += char;
+        }
+    }
+    if (currentParam) {
+        params.push(currentParam);
+    }
+    return params; // these still have whitespace
+}
+
+function parseTemplateParams(inputTemplateString) {
+    const params = parseTemplateParamsRaw(inputTemplateString);
+
+    // strip whitespace
+    const result = {};
+    params.forEach(param => {
+        const eqIndex = param.indexOf('=');
+        if (eqIndex !== -1) {
+            const key = param.substring(0, eqIndex).trim();
+            const value = param.substring(eqIndex + 1).trim();
+            if (key) {
+                result[key] = value;
+            }
+        }
+    });
+
+    return result;
+}
+
+function updateTemplateParamInPage(pageText, templateName, targetKey, newValue){
+    const [fullMatch, prefix, content, suffix] = findTemplateInPageRaw(pageText, templateName);
+    console.log(pageText);
+    console.log(templateName);
+    console.log(findTemplateInPageRaw(pageText, templateName));
+    const params = parseTemplateParamsRaw(content);
+    let keyFound = false;
+    const updatedParams = params.map(param => {
+        const eqIndex = param.indexOf('=');
+        if (eqIndex !== -1) {
+            const key = param.substring(0, eqIndex).trim();
+            if (key === targetKey) {
+                keyFound = true;
+                // preserve spacing around = sign
+                const beforeEq = param.substring(0, eqIndex);
+                const afterEq = param.substring(eqIndex + 1);
+                const spaceMatch = afterEq.match(/^(\s*)/);
+                const leadingSpaces = spaceMatch ? spaceMatch[1] : '';
+                
+                // preserve newlines and whitespace
+                const trailingSpaceMatch = afterEq.match(/(\s*)$/);
+                const trailingSpaces = trailingSpaceMatch ? trailingSpaceMatch[1] : '';
+                
+                return `${beforeEq}=${leadingSpaces}${newValue}${trailingSpaces}`;
+            }
+        }
+        return param;
+    });
+
+    // if we didn't find the key, we append it
+    if (!keyFound) {
+        let indentation = '\n| ';
+        if (params.length > 0) {
+            const lastIndex = updatedParams.length - 1;
+            const lastParam = updatedParams[lastIndex];
+            
+            updatedParams[lastIndex] = lastParam.trimEnd();
+
+        }
+        updatedParams.push(`${indentation}${targetKey} = ${newValue}\n`);
+    }
+
+    // rebuild template and substitute it in
+    const updatedTemplate = prefix + updatedParams.join('|') + suffix;
+    return pageText.replace(fullMatch, updatedTemplate);
+}
+
+mw.loader.using(['mediawiki.util', 'mediawiki.api'], async function() {
 
 var config = mw.config.get([
 	'debug',
@@ -19,31 +151,6 @@ var config = mw.config.get([
 	'wgRelevantUserName'
 ]);
 
-if (!window.OCALinkSize){
-	linkSize = 0.6;
-} else{
-	linkSize = window.OCALinkSize;
-}
-
-function swapInDates(inputString, thisMonthNum, thisYear){
-	/*
-	year, month, month02d, monthname, and monthnameshort are commonly supported by bots
-	quarter is supported by Hazard-Bot
-	Hazard-Bot also supports isoyear, week, and isoweek, but I found no evidence of use of any of these on Wikidata, so have not implemented (since I have no page to test these with).
-	*/
-	thisMonthFullName = config.wgMonthNames[ thisMonthNum ];
-	monthNamesShort = [ "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" ];
-	thisMonthShortName = monthNamesShort[ thisMonthNum ];
-	thisQuarter = Math.ceil(thisMonthNum/4);
-	return inputString
-		.replace( /\| *archive *= */, '' )
-		.replace( /\%\(year\)d/g, thisYear )
-		.replace( /\%\(month\)d/g, thisMonthNum )
-		.replace( /\%\(month\)02d/g, thisMonthNum.toString().padStart(2, '0') ) // Month with padding so it's always two digits. Probably fine to hard code this instead of adding generic support for padding, since it's not like this comes up often, right?
-		.replace( /\%\(monthname\)s/g, thisMonthFullName )
-		.replace( /\%\(monthnameshort\)s/g, thisMonthShortName )
-		.replace( /\%\(quarter\)s/g, thisQuarter );
-}
 
 function determinePageArchivability(){
     const categories = config.wgCategories;
@@ -56,7 +163,295 @@ function determinePageArchivability(){
     return false // fallback
 }
 
-$( document ).ready( function () {
+async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionName, archiveConfig) {
+    const mSection = 'retrieving section content...';
+    const mPosting = '<span style="color: #004400">Content retrieved,</span> performing edits...';
+    const mPosted = '<span style="color: #008800">Archive appended...</span>';
+    const mCleared = '<span style="color: #008800">Section cleared...</span>';
+    const mReloading = '<span style="color: #000088">All done! </span><a href="#archiverLink" onClick="javascript:location.reload();" title="Reload page">Reloading</a>...';
+
+    document.body.insertAdjacentHTML(
+        'beforeend', 
+        '<div class="overlay" style="background-color: #000000; opacity: 0.4; position: fixed; top: 0px; left: 0px; width: 100%; height: 100%; z-index: 500;"></div>'
+    );
+
+    document.body.insertAdjacentHTML(
+        'afterbegin', 
+        '<div class="arcProg" style="font-weight: bold; box-shadow: 7px 7px 5px #000000; font-size: 0.9em; line-height: 1.5em; z-index: 501; opacity: 1; position: fixed; width: 50%; left: 25%; top: 30%; background: #F7F7F7; border: #222222 ridge 1px; padding: 20px;"></div>'
+    );
+
+    const arcProg = document.querySelector('.arcProg');
+
+    arcProg.insertAdjacentHTML(
+        'beforeend', 
+        `<div>Archive name <span style="font-weight: normal; color: #003366;">${archiveName}</span> <span style="color: darkgreen;">found</span>, ${mSection} (${archivePageSize}b)</div>`
+    );
+
+    const pageid = config.wgArticleId;
+
+    const api = new mw.Api();
+    const sectionResponse = await api.get({
+        action: 'query',
+        pageids: pageid,
+        rvsection: sectionNumber,
+        prop: [ 'revisions', 'info' ],
+        rvprop: 'content',
+        indexpageids: 1,
+        rawcontinue: ''
+    });
+
+    var sectionContent = sectionResponse.query.pages[ pageid ].revisions[ 0 ][ '*' ];
+    $( '.arcProg' ).append( '<div>' + mPosting + '</div>' );
+
+    var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}), ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
+    var dnauDate;
+    if ( dnau === null || dnau === undefined ) {
+        dnauDate = Date.now();
+        dnau = null;
+    } else {
+        dnau = dnau[ 1 ] + ':' + dnau[ 2 ] + ' ' + dnau[ 3 ] + ' ' + dnau[ 4 ] + ' ' + dnau[ 5 ];
+        dnauDate = new Date( dnau );
+        dnauDate = dnauDate.valueOf();
+    }
+
+    if ( dnauDate > Date.now() ) {
+        $( '.arcProg' ).remove();
+        $( '.overlay' ).remove();
+        var dnauAbortMsg = '<p>This section has been marked \"Do Not Archive Until\" ' + dnau + ', so archiving was aborted.<br /><br /><span style="font-size: larger;">Please, see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span></p>';
+        mw.notify( $( dnauAbortMsg ), { title: 'OneClickArchiver aborted!', tag: 'OCAdnau', autoHide: false } );
+        return;
+    }
+
+    if ( archivePageSize <= 0  ) {
+        sectionContent = archiveHeader + '\n\n' + sectionContent;
+        mPosted = '<span style="color: #008800">Archive created...</span>';
+    } else {
+        sectionContent = '\n\n{{Clear}}\n' + sectionContent;
+    }
+
+    if ( dnau != null ) {
+        sectionContent = sectionContent.replace( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}), ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/g, '' );
+    }
+
+    await api.postWithToken( 'edit', {
+        action: 'edit',
+        title: archiveName,
+        appendtext: sectionContent,
+        summary: '/* '+sectionName+' */ archived using [[User:Elli/OneClickArchiver|OneClickArchiver]])'
+    });
+    
+    $( '.arcProg' ).append( '<div class="archiverPosted">' + mPosted + '</div>' );
+    new mw.Api().postWithToken( 'edit', {
+        action: 'edit',
+        section: sectionNumber,
+        pageid: pageid,
+        text: '',
+        summary: '[[User:Elli/OneClickArchiver|OneClickArchived]] "' + sectionName + '" to [[' + archiveName + ']]'
+    } ).done( function () {
+        arcProg.insertAdjacentHTML(
+            'beforeend', 
+            `<div>Updating archive config if needed...</div>`
+        );
+        archiveConfig.updateConfigIfNeeded(pageid);
+        location.reload();
+    } );
+}
+
+function addArchiveLinks(headerLevel, archiveName, archivePageSize, archiveConfig){
+    document.querySelectorAll('div.mw-heading' + headerLevel).forEach(function(sectionHeadingDiv) {
+        const sectionHeadingElement = sectionHeadingDiv.querySelector('h' + headerLevel);
+
+        const sectionName = sectionHeadingElement.textContent;
+
+        // get the section number
+        const editSectionURL = sectionHeadingDiv.querySelector('.mw-editsection a:not(.mw-editsection-visualeditor)').getAttribute('href'); // we don't want the visualeditor link, if it's there
+
+        const urlParams = new URLSearchParams(editSectionURL);
+        const section = urlParams.get('section');
+
+        var sectionNumber = 0;
+        if (section && !section.includes('T')) { // we don't want transcluded sections
+            sectionNumber = parseInt(section, 10);
+        } else{ return };
+
+        // build our button
+        const archiveButtonWrapper = document.createElement('div');
+        archiveButtonWrapper.style.fontSize = linkSize + 'em';
+        archiveButtonWrapper.style.fontWeight = 'bold';
+        archiveButtonWrapper.style.float = 'right';
+        archiveButtonWrapper.innerHTML = ` | `;
+
+        const archiveButton = document.createElement('a');
+        archiveButton.href = '#archiverLink';
+        archiveButton.class = 'archiverLink';
+        archiveButton.id = sectionNumber;
+        archiveButton.title = `${i18n_archive_to_text} ${archiveName}`
+        archiveButton.innerText = i18n_archive_link_text;
+
+        archiveButton.addEventListener('click', function(e){
+            e.preventDefault();
+            archiveThis(sectionNumber, archiveName, archivePageSize, sectionName, archiveConfig);
+        })
+
+        archiveButtonWrapper.append(archiveButton);
+        sectionHeadingDiv.append(archiveButtonWrapper);
+    });
+}
+
+// this is an abstract class -- need to implement details for each type of bot config
+class archiveBotConfig{
+    constructor(counter, archivePageHeader, headerLevel){
+        this.counter = counter;
+        if (!counter) this.counter = 1;
+        this.archivePageHeader = archivePageHeader;
+        this.headerLevel = headerLevel;
+    }
+
+    getCurrentArchiveName(){ // for getting the CURRENT archive -- this doesn't require any HTTP request; just string substitution
+        throw new Error("You must implement this method!")
+    }
+
+    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections){ // for getting the archive we are actually going to write to. this requires details from the current archive
+        throw new Error("You must implement this method!")
+    }
+
+    updateConfigIfNeeded(){
+        throw new Error("You must implement this method!")
+    }
+}
+
+// this is used for Misza-compatible bots (e.g. Hazard-Bot on Wikidata)
+class archiveBotConfigMisza extends archiveBotConfig{
+    // utility function for properly parsing strings like 100B, 100K, 100M, etc.
+    _parseToBytes(sizeString){
+        if (typeof sizeString !== 'string') return null; // not a string? (this shouldn't be possible)
+        const cleanStr = sizeString.trim().toUpperCase();
+        const match = cleanStr.match(/^(\d+(?:\.\d+)?)\s*([KMGTPB]?)$/);
+        if (!match) return null; // couldn't parse
+        const value = parseFloat(match[1]);
+        const unit = match[2];
+        const multipliers = {
+            '': 1,
+            'B': 1,
+            'K': 1e3,
+            'M': 1e6,
+            'G': 1e9, // hopefully we won't need anything bigger than this
+        };
+        return value * (multipliers[unit] || 1);
+    }
+
+    _applyPythonTemplateSubstitutions(inputTemplate, counter){
+        const now = new Date();
+        const thisMonthNum = now.getMonth() + 1; // This returns something 0-11, but we want 1-12.
+        const thisYear = now.getFullYear();
+
+        /*
+        year, month, month02d, monthname, and monthnameshort are commonly supported by bots
+        quarter is supported by Hazard-Bot
+        Hazard-Bot also supports isoyear, week, and isoweek, but I found no evidence of use of any of these on Wikidata, so have not implemented (since I have no page to test these with).
+        */
+        const thisMonthFullName = config.wgMonthNames[ thisMonthNum ];
+        const monthNamesShort = [ "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" ];
+        const thisMonthShortName = monthNamesShort[ thisMonthNum ];
+        const thisQuarter = Math.ceil(thisMonthNum/4);
+
+        const values = {
+            year: thisYear,
+            month: thisMonthNum,
+            monthname: thisMonthFullName,
+            monthnameshort: thisMonthShortName,
+            quarter: thisQuarter,
+            counter: counter
+        };
+
+        // will capture anything that looks like a Python variable placeholder
+        const placeholderRegex = /%\((\w+)\)(0?\d+)?([ds])/g;
+
+        return inputTemplate.replace(placeholderRegex, (match, key, pad, type) => {
+            // if we don't have something for this placeholder, skip
+            if (!(key in values)) return match;
+
+            let val = String(values[key]);
+
+            // handling for padding
+            if (pad) {
+                const padChar = pad.startsWith('0') ? '0' : ' ';
+                const padLength = parseInt(pad, 10);
+                val = val.padStart(padLength, padChar);
+            }
+
+            return val;
+        });
+
+    }
+
+    constructor(counter, archiveheader, archive, maxarchivesize, templateName, pageText){
+        const headerLevel = 2; // MiszaBot doesn't support custom headerlevels
+        super(counter, archiveheader, headerLevel);
+        this.pageText = pageText;
+        this.templateName = templateName;
+        this.parsedCounter = counter; // super makes sure counter is a valid number to avoid "Archive undefined". but we store this separately to know if our template is broken.
+        this.archivePythonTemplate = archive;
+        this.archiveSizeLimitType = null;
+        if (maxarchivesize.endsWith("T")){
+            this.archiveSizeThreadLimit = parseInt(maxarchivesize.slice(0, -1));
+            if (this.archiveSizeThreadLimit) this.archiveSizeLimitType = "threads"; // if we fail to parse then we keep the null value
+        } else {
+            this.archiveSizeByteLimit = this._parseToBytes(maxarchivesize);
+            if (this.archiveSizeByteLimit) this.archiveSizeLimitType = "bytes"; // if we fail to parse then we keep the null value
+        }
+    }
+
+    getCurrentArchiveName(){
+        return this._applyPythonTemplateSubstitutions(this.archivePythonTemplate, this.counter);
+    }
+
+    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections){
+        this.toWriteCounter = this.counter;
+        if (this.archiveSizeLimitType === "threads" ){
+            if (currentArchiveSections >= this.archiveSizeThreadLimit){
+                this.toWriteCounter++;
+            }
+        } else if (this.archiveSizeLimitType === "bytes") {
+            if (currentArchiveBytes >= this.archiveSizeByteLimit){
+                this.toWriteCounter++;
+            }
+        }
+        return this._applyPythonTemplateSubstitutions(this.archivePythonTemplate, this.toWriteCounter);
+    }
+
+    updateConfigIfNeeded(pageid){
+        const newContent = updateTemplateParamInPage(this.pageText, this.templateName, "counter", this.toWriteCounter);
+        if (newContent != this.pageText){
+            new mw.Api().postWithToken( 'edit', {
+                action: 'edit',
+                section: 0,
+                pageid: pageid,
+                text: newContent,
+                summary: '[[User:Elli/OneClickArchiver|OneClickArchiver]] updating counter.'
+            });
+        }
+    }
+
+}
+
+// look for MiszaBot configuration and parse it if it exists
+function parseMiszaBotConfig(pageText){    
+
+    const templateName = "User:MiszaBot/config";
+    const content = findTemplateInPage(pageText, templateName);
+    const config = parseTemplateParams(content);
+    // params we care about:
+    // archive - template for archive page name
+    // counter - current number for last archive - used for %(counter)d variable
+    // maxarchivesize - max size before rolling over to new archive. can either be like 256M/256K/256B or 10T for threads
+    // archiveheader - header for new archive pages. defaults to {{Archive}}
+
+    return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
+}
+
+
+$( document ).ready( async function () {
 	if ( determinePageArchivability() ) {
 		var OCAstate = mw.user.options.get( 'userjs-OCA-enabled', 'true' );
 		var pageid = config.wgArticleId;
@@ -69,361 +464,56 @@ $( document ).ready( function () {
 			pageids: pageid,
 			indexpageids: 1,
 			rawcontinue: ''
-		} ).done( function ( response0 ) {
-			var thisMonthNum, thisYear, archiveNum;
+		} ).done( async function ( response0 ) {
+			var archiveNum;
 			
-			var content0 = response0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
+			const content0 = response0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
 
-			thisMonthNum = new Date().getMonth() + 1; // This returns something 0-11, but we want 1-12.
-			thisYear = new Date().getFullYear();
- 
-			/* archiveme */// Find out if there is already an {{Archive me}} request, and if it is between 1-2 months old
-			if ( config.wgNamespaceNumber === 3 ) {
-				var nowOcto = parseInt( ( ( thisYear * 12 ) + thisMonthNum ), 10 );
-				var archiveme = content0.match( /\{\{Archive ?me(\| *date *= *(January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}))?\}\}/i );
-				if ( archiveme === null || archiveme === undefined ) {
-					errorLog.errorCount++;
-					errorLog.archiveme = '{{Archiveme}} not found.';
-				} else {
-					/* Archive me found - how old is it? */
-					var archivemeMonth = archiveme[ 2 ];
-					var archivemeMonthNum = 0;
-					if ( typeof archivemeMonth === 'number' ) {
-						archivemeMonthNum = parseInt( archivemeMonth, 10 );
-					} else {
-						for ( var i in config.wgMonthNames ) {
-							if ( archivemeMonth === config.wgMonthNames[ i ] ) {
-								archivemeMonthNum = parseInt( i, 10 );
-							} else if ( archivemeMonth === monthNamesShort[ i ] ) {
-								archivemeMonthNum = parseInt( i, 10 );
-							}
-						}
-					}
-					var archivemeYear = parseInt( archiveme[ 3 ], 10 );
-					var archivemeOcto = parseInt( ( ( archivemeYear * 12 ) + archivemeMonthNum ), 10 );
-					var archivemeSafe = parseInt( ( nowOcto - 2 ), 10 );
-					archiveme = archiveme[ 0 ];
-				}
-			}
- 
-			/* counter */// Get the counter value
-			var counterRegEx = new RegExp( '\\| *counter *= *(\\d+)' );
-			var counter = counterRegEx.exec( content0 );
-			if ( counter === null || counter === undefined ) {
-				counter = 1;
-				errorLog.errorCount++;
-				errorLog.counter = counter;
-			} else {
-				counter = counter[ 1 ];
-				archiveNum = counter;
-			}
- 
-			/* archiveName */// Get the archiveName value
-			var archiveNameRegEx = /\| *archive *= *(.*\%\((counter|year|month|monthname|monthnameshort)\)d.*) *(-->)?/;
-			var archiveName = archiveNameRegEx.exec( content0 );
-			var rootBase = config.wgPageName
-					.replace( /\/.*/g, '' )// Chop off the subpages
-					.replace( /_/g, ' ' );// Replace underscores with spaces
-			if ( archiveName === null || archiveName === undefined ) {
-				archiveName = rootBase + '/Archive ' + counter;
-				errorLog.errorCount++;
-				errorLog.archiveName = archiveName;
-			} else { 
-				archiveName = swapInDates(archiveName[ 1 ], thisMonthNum, thisYear).replace( /\%\(counter\)d/g, archiveNum );
-				var archiveBase = archiveName
-					.replace( /\/.*/, '' )// Chop off the subpages
-					.replace( /_/g, ' ' );// Replace underscores with spaces
-				var archiveSub = archiveName
-					.replace( /_/g, ' ' )// Replace underscores with spaces
-					.replace( archiveBase, '' );// Chop off the base pagename
-				if ( archiveBase != rootBase ) {
-					errorLog.errorCount++;
-					errorLog.archiveName = 'Archive name mismatch:<br /><br />Found: ' + archiveName;
-					errorLog.archiveName += '<br />Expected: ' + rootBase.replace( '_', ' ' ) + archiveSub + '<br /><br />';
-				}
-			}
- 
-			/* archivepagesize */// Get the size of the destination archive from the API
-			new mw.Api().get( {
-				action: 'query',
-				prop: 'revisions',rvlimit: 1,
-				rvprop: [ 'size', 'content' ],
-				titles: archiveName,
-				list: 'usercontribs',
-				uclimit: 1,
-				ucprop: 'timestamp',
-				ucuser: ( ( config.wgRelevantUserName ) ?
-					config.wgRelevantUserName : 'Example' ),
-				rawcontinue: '',
-			} ).done( function ( archivePageData ) {
-				var archivePageSize = 0;
-				if ( archivePageData.query.pages[ -1 ] === undefined ) {
-					for ( var a in archivePageData.query.pages ) {
-						archivePageSize = parseInt( archivePageData.query.pages[ a ].revisions[ 0 ].size, 10 );
-						archiveName = archivePageData.query.pages[ a ].title;
-					}
-				} else {
-					archivePageSize = -1;
-					archiveName = archivePageData.query.pages[ archivePageSize ].title;
-					errorLog.errorCount++;
-					errorLog.archivePageSize = -1;
-					errorLog.archiveName = '<a class="new" href="' +
-						mw.util.getUrl( archiveName, { action: 'edit', redlink: '1' } ) +
-						'" title="' + archiveName + '">' + archiveName + '</a>';
-				}
- 
-				/* maxarchivesize */// Get the defined max archive size from template
-				var maxArchiveSizeRegEx = new RegExp( '\\| *maxarchivesize *= *(\\d+K?)' );
-				var maxArchiveSize = maxArchiveSizeRegEx.exec( content0 );
-				if ( maxArchiveSize === null || maxArchiveSize[ 1 ] === undefined ) {
-					maxArchiveSize = parseInt( 153600, 10 );
-					errorLog.errorCount++;
-					errorLog.maxArchiveSize = maxArchiveSize;
-				} else if ( maxArchiveSize[ 1 ].slice( -1 ) === "K" && $.isNumeric( maxArchiveSize[ 1 ].slice( 0, maxArchiveSize[ 1 ].length-1 ) ) ) {
-					maxArchiveSize = parseInt( maxArchiveSize[ 1 ].slice( 0, maxArchiveSize[ 1 ].length - 1 ), 10 ) * 1024;
-				} else if ( $.isNumeric( maxArchiveSize[ 1 ].slice() ) ) {
-					maxArchiveSize = parseInt( maxArchiveSize[ 1 ].slice(), 10 );
-				}
- 
-				/* pslimit */// If maxArchiveSize is defined, and archivePageSize >= maxArchiveSize increment counter and redfine page name.
-				if ( !errorLog.maxArchiveSize && archivePageSize >= maxArchiveSize ) {
-					counter++;
-					archiveName = archiveNameRegEx.exec( content0 );
-					archiveName = swapInDates(archiveName[ 1 ], thisMonthNum, thisYear).replace( /\%\(counter\)d/g, counter );
-					var oldCounter = counterRegEx.exec( content0 );
-					var newCounter = '|counter=1';
-					if ( oldCounter !== null && oldCounter !== undefined ) {
-						newCounter = oldCounter[ 0 ].replace( oldCounter[ 1 ], counter );
-						oldCounter = oldCounter[ 0 ];
-					} else {
-						errorLog.errorCount++;
-						errorLog.newCounter = newCounter;
-					}
-				}
- 
-				/* archiveheader */// Get the defined archive header to place on archive page if it doesn't exist
-				var archiveHeaderRegEx = new RegExp( '\\| *archiveheader *= *(\{\{[^\r\n]*\}\})' );
-				var archiveHeader = archiveHeaderRegEx.exec( content0 );
-				if ( archiveHeader === null || archiveHeader === undefined ) {
-					archiveHeader = "{{Aan}}";
-					errorLog.errorCount++;
-					errorLog.archiveHeader = archiveHeader;
-				} else {
-					archiveHeader = archiveHeader[ 1 ];
-				}
- 
-				/* headerlevel */// Get the headerlevel value or default to '2'
-				var headerLevelRegEx = new RegExp( '\\| *headerlevel *= *(\\d+)' );
-				var headerLevel = headerLevelRegEx.exec( content0 );
-				if ( headerLevel === null || headerLevel === undefined ) {
-					headerLevel = 2;
-					errorLog.errorCount++;
-					errorLog.headerLevel = headerLevel;
-				} else {
-					headerLevel = parseInt( headerLevel[ 1 ] );
-				}
- 
-				/* debug */// Table to report the values found.
-				if ( config.debug === true ) {
-					var OCAreport = '<table style="width: 100%;" border="1"><tr><th style="font-variant: small-caps; font-size: 20px;">config</th><th style="font-variant: small-caps; font-size: 20px;">value</th></tr>';
-					OCAreport += '<tr><td>Counter</td><td style="text-align: center;';
-					if ( errorLog.counter ) { OCAreport += ' background-color: #FFEEEE;">' + errorLog.counter; }
-						else { OCAreport += '">' + counter; }
-					OCAreport += '</td></tr><tr><td colspan="2" style="text-align: center;">Archive name</td></tr><tr><td colspan="2" style="text-align: center;';
-					if ( errorLog.archiveName ) { OCAreport += ' background-color: #FFEEEE;">' + errorLog.archiveName; }
-						else { OCAreport += '">' + archiveName; }
-					OCAreport += '</td></tr><tr><td>Header Level</td><td style="text-align: center;';
-					if ( errorLog.headerLevel ) { OCAreport += ' background-color: #FFEEEE;">' + errorLog.headerLevel; }
-						else { OCAreport += '">' + headerLevel; }
-					OCAreport +=  '</td></tr><tr><td>Archive header</td><td style="text-align: center;';
-					if ( errorLog.archiveHeader ) { OCAreport += ' background-color: #FFEEEE;">' + errorLog.archiveHeader; }
-						else { OCAreport += '">' + archiveHeader; }
-					OCAreport +=  '</td></tr><tr><td>Max<br />archive size</td><td style="text-align: center;';
-					if ( errorLog.maxArchiveSize ) { OCAreport += ' background-color: #FFEEEE;">' + errorLog.maxArchiveSize; }
-						else { OCAreport += '">' + maxArchiveSize; }
-					OCAreport +=  '</td></tr><tr><td>Current<br />archive size</td><td style="text-align: center;';
-					if ( errorLog.archivePageSize ) { OCAreport += ' background-color: #FFEEEE;">' + archivePageSize; }
-						else if ( archivePageSize >= maxArchiveSize ) { OCAreport += ' background-color: #FFEEEE;">' + archivePageSize; }
-						else { OCAreport += '">' + archivePageSize; }
-					if ( !errorLog.archiveme && archiveme !== undefined ) {
-						OCAreport +=  '</td></tr><tr><td colspan="2" style="text-align: center;';
-						if ( ( nowOcto - archivemeOcto ) <= 1 ) { OCAreport += '">Asked to archive '; }
-						if ( ( nowOcto - archivemeOcto ) === 0 ) { OCAreport += 'this month'; }
-						else if ( ( nowOcto - archivemeOcto ) === 1 ) { OCAreport += 'last month'; }
-						else { OCAreport += ' background-color: #FFEEEE;">Asked to archive ' + ( nowOcto - archivemeOcto ) + ' months ago'; }
-					}
-					if ( errorLog.archiveme || archiveme !== undefined ) { OCAreport +=  '</td></tr><tr><td colspan="2" style="text-align: center;'; }
-						if ( errorLog.archiveme ) { OCAreport +=  ' background-color: #FFEEEE;">' + errorLog.archiveme; }
-						else if ( archiveme !== undefined ) { OCAreport += '">' + archiveme; }
-					OCAreport +=  '</td></tr><tr><td colspan="2" style="font-size: larger; text-align: center;"><a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">Documentation</a></td></tr></table>';
-					mw.notify( $( OCAreport ), { title: 'OneClickArchiver report!', tag: 'OCA', autoHide: false } );
-				}
- 
-				var OCAerror = '<p>The following errors detected:<br />';
-				if ( errorLog.counter ) { OCAerror += '<b style="font-size: larger; color: #FF0000;">&bull;</b>&nbsp;Unable to find <b>|counter=</b><br />&nbsp; &nbsp; &nbsp;Default value: <b>1</b><br />'; }
-				if ( errorLog.archiveName && errorLog.archiveName.search( 'defaulted to' ) !== -1 ) { OCAerror += '<b style="font-size: larger; color: #FF0000;">&bull;</b>&nbsp;Unable to find <b>|archive=</b><br />&nbsp; &nbsp; &nbsp;Default value: <b>' + archiveName + '</b><br />'; }
-				if ( errorLog.archiveName && errorLog.archiveName.search( 'mismatch' ) !== -1 ) { OCAerror += '<b style="font-size: larger; color: #FF0000;">&bull;</b>&nbsp;Archive name mismatch detected.<br />'; }
-				if ( errorLog.headerLevel ) { OCAerror += '&nbsp; Unable to find <b>|headerlevel=</b><br />&nbsp; &nbsp; &nbsp;Default value: <b>2</b><br />'; }
-				if ( errorLog.archiveHeader ) { OCAerror += '&nbsp; Unable to find <b>|archiveheader=</b><br />&nbsp; &nbsp; &nbsp;Default value: <b>"{{Aan}}"</b><br />'; }
-				if ( errorLog.maxArchiveSize ) { OCAerror += '&nbsp; Unable to find <b>|maxarchivesize=</b><br />&nbsp; &nbsp; &nbsp;Default value: <b>153600</b><br />'; }
-				if ( errorLog.counter || errorLog.archiveName ) { OCAerror += '<br /><b style="font-size: larger; color: #FF0000;">&bull;</b>&nbsp;Causing the script to abort.<br />'; }
-				OCAerror += '<br /><span style="font-size: larger;">Please, see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span></p>';
-				var archiverReport = mw.util.addPortletLink(
-					'p-cactions',
-					'#archiverNoLink',
-					'|Archive',
-					'pt-OCA-report',
-					'Report for why there are no |Archive links on this page',
-					null,
-					null
-				);
-				$( archiverReport ).click( function ( e ) {
-					e.preventDefault();
-					mw.notify( $( OCAerror ), { title: 'OneClickArchiver errors!', tag: 'OCAerr', autoHide: false } );
-				} );
- 
-				if ( config.wgNamespaceNumber === 3 && ( errorLog.counter || errorLog.archiveName ) &&
-				config.debug === true && errorLog.archiveme )  {
-					if ( confirm( 'Click [OK] to post {{Archiveme|{{SUBST:DATE}}}} to the top of the page and abort or\n\t[Cancel] to attempt running with default values.' ) === true ) {
-						new mw.Api().postWithToken( 'edit', {
-							action: 'edit',
-							section: 0,
-							pageid: pageid,
-							text: '{{Archiveme|{{SUBST:DATE}}}}\n' + content0,
-							summary: '{{[[Template:Archiveme|Archiveme]]}} posted with [[User:Elli/OneClickArchiver|OneClickArchiver]].'
-						} ).done( function () {
-							alert( 'Request for user to set up archiving posted.' );
-							location.reload();
-						} );
-					}
-				} else if ( config.wgNamespaceNumber === 3 && archivemeOcto >= archivemeSafe ) {
- 
-					/* Archive me request was made, give the user a chance to comply */
- 
-				} else if ( config.wgNamespaceNumber === 3 && ( errorLog.counter || errorLog.archiveName ) && config.debug === true && confirm( '{{Archiveme}} found on the top of the page:\n\n\t Click [OK] abort or\n\t[Cancel] to attempt running with default values.' ) === true ) {
- 
-					/* User aborted script */
- 
-				} else {
-//					$( 'h' + headerLevel + ' span.mw-headline' ).each( function() {
-					$( 'div.mw-heading' + headerLevel + ' h'+headerLevel ).each( function() {
-						var sectionName = $( this ).text();
-						var editSectionUrl = $( this ).parent().find('.mw-editsection a').not('.mw-editsection-visualeditor').first().attr( 'href' );
-						var sectionReg = /&section=(.*)/;
-						var sectionRaw = sectionReg.exec( editSectionUrl );
-						if ( sectionRaw != null && sectionRaw[ 1 ].indexOf( 'T' ) < 0 ) {
-							var sectionNumber = parseInt( sectionRaw[ 1 ] );
-//							if ( $( this ).parent().prop( 'tagName' ) === 'H' + headerLevel ) {
- 
-//								$( this ).parent( 'h' + headerLevel ).append(
-								$( this ).parent( 'div.mw-heading' ).append(
-									' <div style="font-size: ' + linkSize + 'em; font-weight: bold; float: right;"> | <a id="' + sectionNumber +
-									'" href="#archiverLink" class="archiverLink">' + 'Archive' + '</a></div>'
-								);
-//								$(this).parent('h' + headerLevel).find('a.archiverLink').attr('title', 'Archive to: "'+archiveName+'"');
-								$(this).parent('div.mw-heading').find('a.archiverLink').attr('title', 'Archive to: "'+archiveName+'"');
-//								$( this ).parent( 'h' + headerLevel ).find( 'a.archiverLink' ).click( function() {
-								$( this ).parent( 'div.mw-heading' ).find( 'a.archiverLink' ).click( function() {
- 
-									var mHeaders = '<span style="color: #444444;">Retrieving headers...</span>';
-									var mSection = 'retrieving section content...';
-									var mPosting = '<span style="color: #004400">Content retrieved,</span> performing edits...';
-									var mPosted = '<span style="color: #008800">Archive appended...</span>';
-									var mCleared = '<span style="color: #008800">Section cleared...</span>';
-									var mReloading = '<span style="color: #000088">All done! </span><a href="#archiverLink" onClick="javascript:location.reload();" title="Reload page">Reloading</a>...';
- 
-									$( 'body' ).append( '<div class="overlay" style="background-color: #000000; opacity: 0.4; position: fixed; top: 0px; left: 0px; width: 100%; height: 100%; z-index: 500;"></div>' );					
- 
-									$( 'body' ).prepend( '<div class="arcProg" style="font-weight: bold; box-shadow: 7px 7px 5px #000000; font-size: 0.9em; line-height: 1.5em; z-index: 501; opacity: 1; position: fixed; width: 50%; left: 25%; top: 30%; background: #F7F7F7; border: #222222 ridge 1px; padding: 20px;"></div>' );
- 
-									$( '.arcProg' ).append( '<div>' + mHeaders + '</div>' );
- 
-									$( '.arcProg' ).append( '<div>' + 'Archive name <span style="font-weight: normal; color: #003366;">' + archiveName + '</span> <span style="color: darkgreen;">found</span>, ' + mSection + ' (' + archivePageSize + 'b)</div>' );
-									new mw.Api().get( {
-										action: 'query',
-										pageids: pageid,
-										rvsection: sectionNumber,
-										prop: [ 'revisions', 'info' ],
-										rvprop: 'content',
-										indexpageids: 1,
-										rawcontinue: ''
-									} ).done( function ( responseSection ) {
-										var sectionContent = responseSection.query.pages[ pageid ].revisions[ 0 ][ '*' ];
-										$( '.arcProg' ).append( '<div>' + mPosting + '</div>' );
- 
-										var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}), ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
-										var dnauDate;
-										if ( dnau === null || dnau === undefined ) {
-											dnauDate = Date.now();
-											dnau = null;
-										} else {
-											dnau = dnau[ 1 ] + ':' + dnau[ 2 ] + ' ' + dnau[ 3 ] + ' ' + dnau[ 4 ] + ' ' + dnau[ 5 ];
-											dnauDate = new Date( dnau );
-											dnauDate = dnauDate.valueOf();
-										}
- 
-										if ( dnauDate > Date.now() ) {
-											$( '.arcProg' ).remove();
-											$( '.overlay' ).remove();
-											var dnauAbortMsg = '<p>This section has been marked \"Do Not Archive Until\" ' + dnau + ', so archiving was aborted.<br /><br /><span style="font-size: larger;">Please, see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span></p>';
-											mw.notify( $( dnauAbortMsg ), { title: 'OneClickArchiver aborted!', tag: 'OCAdnau', autoHide: false } );
-										} else {
-											var archiveAction = 'adding section';
-											if ( archivePageSize <= 0 || ( archivePageSize >= maxArchiveSize && !errorLog.maxArchiveSize ) ) {
-												sectionContent = archiveHeader + '\n\n' + sectionContent;
-												archiveAction = 'creating';
-												mPosted = '<span style="color: #008800">Archive created...</span>';
-											} else {
-												sectionContent = '\n\n{{Clear}}\n' + sectionContent;
-											}
- 
-											if ( dnau != null ) {
-												sectionContent = sectionContent.replace( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}), ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/g, '' );
-											}
- 
-											new mw.Api().postWithToken( 'edit', {
-												action: 'edit',
-												title: archiveName,
-												appendtext: sectionContent,
-												summary: '/* '+sectionName+' */ archived using [[User:Elli/OneClickArchiver|OneClickArchiver]])'
-											} ).done( function () {
-												$( '.arcProg' ).append( '<div class="archiverPosted">' + mPosted + '</div>' );
-												new mw.Api().postWithToken( 'edit', {
-													action: 'edit',
-													section: sectionNumber,
-													pageid: pageid,
-													text: '',
-													summary: '[[User:Elli/OneClickArchiver|OneClickArchived]] "' + sectionName + '" to [[' + archiveName + ']]'
-												} ).done( function () {
-													$( '.arcProg' ).append( '<div class="archiverCleared">' + mCleared + '</div>' );
-													if ( archivePageSize >= maxArchiveSize && !errorLog.maxArchiveSize ) {
-														var mUpdated = '<span style="color: #008800">Counter updated...</span>';
-														new mw.Api().postWithToken( 'edit', {
-															action: 'edit',
-															section: 0,
-															pageid: pageid,
-															text: content0.replace( oldCounter, newCounter ),
-															summary: '[[User:Elli/OneClickArchiver|OneClickArchiver]] updating counter.'
-														} ).done( function () {
-															$( '.arcProg' ).append( '<div class="archiverPosted">' + mUpdated + '</div>' );
-															$( '.arcProg' ).append( '<div>' + mReloading + '</div>' );
-															location.reload();
-														} );
-													} else {
-														$( '.arcProg' ).append( '<div>' + mReloading + '</div>' );
-														location.reload();
-													}
-												} );
-											} );
-										}
-									} );
-								} );
-//							}
-						}
-					} );
-				}
-			} );
+            const archiveConfig = parseMiszaBotConfig(content0);
+
+            const currentArchiveName = archiveConfig.getCurrentArchiveName();
+
+            const api = new mw.Api();
+            const [ currentArchivePageData, currentArchivePageParse ] = await Promise.all([
+                api.get({ // this is for page byte size
+                    action: 'query',
+                    prop: 'revisions',
+                    rvlimit: 1,
+                    rvprop: [ 'size', 'content' ],
+                    titles: currentArchiveName,
+                    list: 'usercontribs',
+                    uclimit: 1,
+                    ucprop: 'timestamp',
+                    ucuser: config.wgRelevantUserName || 'Example',
+                    rawcontinue: '',
+                }),
+                api.get({ // this is for number of sections
+                    action: 'parse',
+                    page: currentArchiveName,
+                    prop: 'tocdata',
+                }).catch( error => {
+                    // catch if page doesn't exist
+                    if ( error === 'missingtitle' ) {
+                        return { parse: { tocdata: { sections: [] } } };
+                    }
+                    // otherwise, it's a real error
+                    throw error;
+                })
+            ]);
+
+            const page = Object.values( currentArchivePageData?.query?.pages || {} )[0];
+            const currentArchiveBytes = parseInt( page?.revisions?.[ 0 ]?.size, 10 ) || -1;
+
+            const sections = currentArchivePageParse?.parse?.tocdata?.sections || [];
+            const TOClevel = archiveConfig.headerLevel - 1; // TOC level is one below headings generally (i.e. h2 is at the top level)
+            const currentArchiveSections = sections.filter( s => parseInt(s.tocLevel, 10) === TOClevel ).length;
+
+            const archivePageToWrite = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections);
+
+            addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveBytes, archiveConfig);
+
 		} );
+
 		var linkTextD = '1CA is on', linkDescD = 'Disable OneClickArchiver';
 		var linkTextE = '1CA is off', linkDescE = 'Enable OneClickArchiver';
 		var linkText = linkTextD, linkDesc = linkDescD;
