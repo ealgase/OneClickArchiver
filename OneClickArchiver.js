@@ -92,9 +92,6 @@ function parseTemplateParams(inputTemplateString) {
 
 function updateTemplateParamInPage(pageText, templateName, targetKey, newValue){
     const [fullMatch, prefix, content, suffix] = findTemplateInPageRaw(pageText, templateName);
-    console.log(pageText);
-    console.log(templateName);
-    console.log(findTemplateInPageRaw(pageText, templateName));
     const params = parseTemplateParamsRaw(content);
     let keyFound = false;
     const updatedParams = params.map(param => {
@@ -197,7 +194,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     var sectionContent = sectionResponse.query.pages[ pageid ].revisions[ 0 ][ '*' ];
     printMessage("Section content retrieved.");
 
-    var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}), ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
+    var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}),? ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
     var dnauDate;
     if ( dnau === null || dnau === undefined ) {
         dnauDate = Date.now();
@@ -209,10 +206,10 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     }
 
     if ( dnauDate > Date.now() ) {
-        $( '.arcProg' ).remove();
-        $( '.overlay' ).remove();
-        var dnauAbortMsg = '<p>This section has been marked \"Do Not Archive Until\" ' + dnau + ', so archiving was aborted.<br /><br /><span style="font-size: larger;">Please, see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span></p>';
-        mw.notify( $( dnauAbortMsg ), { title: 'OneClickArchiver aborted!', tag: 'OCAdnau', autoHide: false } );
+        document.querySelectorAll('.arcProg, .overlay').forEach(element => element.remove());
+        const dnauAbortMsg = document.createElement('p');
+        dnauAbortMsg.innerHTML = 'This section has been marked \"Do Not Archive Until\" ' + dnau + ', so archiving was aborted.<br /><br /><span style="font-size: larger;">Please, see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span>';
+        mw.notify( dnauAbortMsg, { title: 'OneClickArchiver aborted!', tag: 'OCAdnau', autoHide: false } );
         return;
     }
 
@@ -236,17 +233,16 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     });
     
     printMessage("Successfully added to archive. Removing from source page.");
-    new mw.Api().postWithToken( 'edit', {
+    await new mw.Api().postWithToken( 'edit', {
         action: 'edit',
         section: sectionNumber,
         pageid: pageid,
         text: '',
         summary: '[[User:Elli/OneClickArchiver|OneClickArchived]] "' + sectionName + '" to [[' + archiveName + ']]'
-    } ).done( async function () {
-        printMessage("Successfully removed from source page. Updating archive config if needed...");
-        await archiveConfig.updateConfigIfNeeded(pageid);
-        location.reload();
-    } );
+    })
+    printMessage("Successfully removed from source page. Updating archive config if needed...");
+    await archiveConfig.updateConfigIfNeeded(pageid);
+    location.reload();
 }
 
 function addArchiveLinks(headerLevel, archiveName, archivePageSize, archiveConfig){
@@ -631,7 +627,6 @@ class archiveBotConfigClueBotIII extends archiveBotConfig{
                 this.toWriteCounter++;
             }
         }
-        console.log(this.counter, this.toWriteCounter);
         const archiveSuffix = this._renderPHPDateString(this.format, this.toWriteCounter);
         return this.archiveprefix + archiveSuffix;
     }
@@ -640,7 +635,6 @@ class archiveBotConfigClueBotIII extends archiveBotConfig{
         if (this.format.includes('%%i')){
             const newContent = updateTemplateParamInPage(this.pageText, this.templateName, "counter", this.toWriteCounter);
             if (newContent != this.pageText){
-                console.log("meow");
                 await new mw.Api().postWithToken( 'edit', {
                     action: 'edit',
                     section: 0,
@@ -672,14 +666,12 @@ function parseClueBotIIIConfig(pageText){
     return new archiveBotConfigClueBotIII(config.archiveprefix, config.format, config.header, config.counter, config.headerlevel, config.maxarchsize, templateName, pageText)
 }
 
-const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig];
-
-$( document ).ready( async function () {
+async function loadOCA(){
 	if ( determinePageArchivability() ) {
 		var OCAstate = mw.user.options.get( 'userjs-OCA-enabled', 'true' );
 		var pageid = config.wgArticleId;
 		var errorLog = { errorCount: 0 };
-		new mw.Api().get( {
+		const pageSection0 = await new mw.Api().get( {
 			action: 'query',
 			prop: [ 'revisions', 'info' ],
 			rvsection: 0,
@@ -687,111 +679,71 @@ $( document ).ready( async function () {
 			pageids: pageid,
 			indexpageids: 1,
 			rawcontinue: ''
-		} ).done( async function ( response0 ) {
-			var archiveNum;
-			
-			const content0 = response0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
+		})
+        var archiveNum;
+        
+        const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
 
-            var archiveConfig;
-            for (const configLoader of archiveConfigsToTry){
-                archiveConfig = configLoader(content0);
-            console.log(archiveConfig);
-                if (archiveConfig) break;
-            }
-//            const archiveConfig = parseMiszaBotConfig(content0);
+        var archiveConfig;
+        for (const configLoader of archiveConfigsToTry){
+            archiveConfig = configLoader(content0);
+            if (archiveConfig) break;
+        }
+        if (!archiveConfig) return; // no valid config
 
-            const currentArchiveName = archiveConfig.getCurrentArchiveName();
+        const currentArchiveName = archiveConfig.getCurrentArchiveName();
 
-            const api = new mw.Api();
-            const [ currentArchivePageData, currentArchivePageParse ] = await Promise.all([
-                api.get({ // this is for page byte size
-                    action: 'query',
-                    prop: 'revisions',
-                    rvlimit: 1,
-                    rvprop: [ 'size', 'content' ],
-                    titles: currentArchiveName,
-                    list: 'usercontribs',
-                    uclimit: 1,
-                    ucprop: 'timestamp',
-                    ucuser: config.wgRelevantUserName || 'Example',
-                    rawcontinue: '',
-                }),
-                api.get({ // this is for number of sections
-                    action: 'parse',
-                    page: currentArchiveName,
-                    prop: 'tocdata',
-                }).catch( error => {
-                    // catch if page doesn't exist
-                    if ( error === 'missingtitle' ) {
-                        return { parse: { tocdata: { sections: [] } } };
-                    }
-                    // otherwise, it's a real error
-                    throw error;
-                })
-            ]);
+        const api = new mw.Api();
+        const [ currentArchivePageData, currentArchivePageParse ] = await Promise.all([
+            api.get({ // this is for page byte size
+                action: 'query',
+                prop: 'revisions',
+                rvlimit: 1,
+                rvprop: [ 'size', 'content' ],
+                titles: currentArchiveName,
+                list: 'usercontribs',
+                uclimit: 1,
+                ucprop: 'timestamp',
+                ucuser: config.wgRelevantUserName || 'Example',
+                rawcontinue: '',
+            }),
+            api.get({ // this is for number of sections
+                action: 'parse',
+                page: currentArchiveName,
+                prop: 'tocdata',
+            }).catch( error => {
+                // catch if page doesn't exist
+                if ( error === 'missingtitle' ) {
+                    return { parse: { tocdata: { sections: [] } } };
+                }
+                // otherwise, it's a real error
+                throw error;
+            })
+        ]);
 
-            const page = Object.values( currentArchivePageData?.query?.pages || {} )[0];
-            const currentArchiveBytes = parseInt( page?.revisions?.[ 0 ]?.size, 10 ) || -1;
+        const page = Object.values( currentArchivePageData?.query?.pages || {} )[0];
+        const currentArchiveBytes = parseInt( page?.revisions?.[ 0 ]?.size, 10 ) || -1;
 
-            const sections = currentArchivePageParse?.parse?.tocdata?.sections || [];
-            const TOClevel = archiveConfig.headerLevel - 1; // TOC level is one below headings generally (i.e. h2 is at the top level)
-            const currentArchiveSections = sections.filter( s => parseInt(s.tocLevel, 10) === TOClevel ).length;
+        const sections = currentArchivePageParse?.parse?.tocdata?.sections || [];
+        const TOClevel = archiveConfig.headerLevel - 1; // TOC level is one below headings generally (i.e. h2 is at the top level)
+        const currentArchiveSections = sections.filter( s => parseInt(s.tocLevel, 10) === TOClevel ).length;
 
-            const archivePageToWrite = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections);
+        const archivePageToWrite = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections);
 
-            addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveBytes, archiveConfig);
+        addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveBytes, archiveConfig);
 
-		} );
-
-		var linkTextD = '1CA is on', linkDescD = 'Disable OneClickArchiver';
-		var linkTextE = '1CA is off', linkDescE = 'Enable OneClickArchiver';
-		var linkText = linkTextD, linkDesc = linkDescD;
-		if ( OCAstate === 'false' ) {
-			linkText = linkTextE; linkDesc = linkDescE;
-			$( 'div.archiverDiv, li#pt-OCA-report' ).css( 'display', 'none' );
-		}
-		var archiverToggle = mw.util.addPortletLink(
-			'p-cactions',
-			'#archiverLink',
-			linkText,
-			'pt-OCA',
-			linkDesc,
-			'o',
-			null
-		);
-		$( archiverToggle ).click( function ( e ) {
-			e.preventDefault();
-			/* Toggle the archiveLinks */
-			$( 'div.archiverDiv' ).css( 'display', function ( _i, val ) {
-				return val === 'none' ? '' : 'none';
-			});
-			/* Toggle the toggle link */
-			$( 'li#pt-OCA a' ).html( function ( _i, val ) {
-				return val === linkTextD ? linkTextE : linkTextD;
-			});
-			/* Toggle the toggle description */
-			$( 'li#pt-OCA a' ).attr( 'title', function ( _i, val ) {
-				return val === linkDescD ? linkDescE : linkDescD;
-			});
-			/* Toggle the error report link */
-			if ( ( errorLog.counter || errorLog.archiveName ) ) {
-				$( 'li#pt-OCA-report' ).css( 'display', function ( _i, val ) {
-					return val === 'none' ? '' : 'none';
-				});
-			}
-			/* Toggle default state */
-			new mw.Api().postWithToken( 'options', {
-				action: 'options',
-				optionname: 'userjs-OCA-enabled',
-				optionvalue: OCAstate === 'true' ? 'false' : 'true'
-			} ).done( function() {
-				var resultMsg = 'OneClickArchiver is now ' + ( OCAstate === 'true' ? 'disabled' : 'enabled' ) + ' by default.';
-				mw.notify(resultMsg);
-				OCAstate = OCAstate === 'true' ? 'false' : 'true';
-			} );
-		} );
 	}
-} );
+}
+
+const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig];
+
+if (document.readyState !== 'loading') {
+    loadOCA();
+} else {
+    document.addEventListener('DOMContentLoaded', async () => {
+        loadOCA();
+    });
+}
 
 });
 // </nowiki>
