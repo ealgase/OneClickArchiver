@@ -119,15 +119,8 @@ function updateTemplateParamInPage(pageText, templateName, targetKey, newValue){
 
     // if we didn't find the key, we append it
     if (!keyFound) {
-        let indentation = '\n| ';
-        if (params.length > 0) {
-            const lastIndex = updatedParams.length - 1;
-            const lastParam = updatedParams[lastIndex];
-            
-            updatedParams[lastIndex] = lastParam.trimEnd();
-
-        }
-        updatedParams.push(`${indentation}${targetKey} = ${newValue}\n`);
+        updatedParams.push(`${targetKey} = ${newValue}\n`);
+        console.log(updatedParams);
     }
 
     // rebuild template and substitute it in
@@ -149,7 +142,7 @@ var config = mw.config.get([
 	'wgRelevantUserName'
 ]);
 
-var OCAStatus;
+var OCAStatus, OCALoading;
 function determinePageArchivability(){
     const categories = config.wgCategories;
     const noManualArchivingCategoryName = 'Pages that should not be manually archived';
@@ -307,7 +300,7 @@ class archiveBotConfig{
         throw new Error("You must implement this method!")
     }
 
-    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections){ // for getting the archive we are actually going to write to. this requires details from the current archive
+    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra){ // for getting the archive we are actually going to write to. this requires details from the current archive
         throw new Error("You must implement this method!")
     }
 
@@ -402,8 +395,8 @@ class archiveBotConfigMisza extends archiveBotConfig{
         return this._applyPythonTemplateSubstitutions(this.archivePythonTemplate, this.counter);
     }
 
-    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections){
-        this.toWriteCounter = this.counter;
+    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra){
+        this.toWriteCounter = parseInt(this.counter) + counterExtra;
         if (this.archiveSizeLimitType === "threads" ){
             if (currentArchiveSections >= this.archiveSizeThreadLimit){
                 this.toWriteCounter++;
@@ -647,30 +640,19 @@ class archiveBotConfigClueBotIII extends archiveBotConfig{
         return this.archiveprefix + archiveSuffix;
     }
 
-    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections){ // for getting the archive we are actually going to write to. this requires details from the current archive
-        this.toWriteCounter = this.counter;
+    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra){ // for getting the archive we are actually going to write to. this requires details from the current archive
+        var toWriteCounter = parseInt(this.counter) + counterExtra;
         if (this.format.includes('%%i')){
             if (currentArchiveBytes >= this.maxarchsize){
-                this.toWriteCounter++;
+                toWriteCounter++;
             }
         }
-        const archiveSuffix = this._renderPHPDateString(this.format, this.toWriteCounter);
+        const archiveSuffix = this._renderPHPDateString(this.format, toWriteCounter);
         return this.archiveprefix + archiveSuffix;
     }
 
     async updateConfigIfNeeded(pageid){
-        if (this.format.includes('%%i')){
-            const newContent = updateTemplateParamInPage(this.pageText, this.templateName, "counter", this.toWriteCounter);
-            if (newContent != this.pageText){
-                await new mw.Api().postWithToken( 'edit', {
-                    action: 'edit',
-                    section: 0,
-                    pageid: pageid,
-                    text: newContent,
-                    summary: '[[User:Elli/OneClickArchiver|OneClickArchiver]] updating counter.'
-                });
-            }
-        }
+        return; // ClueBot format has numberstart as a minimum, not necessarily the next page.
     }
 }
 
@@ -696,79 +678,52 @@ function parseClueBotIIIConfig(pageText){
 const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig, parseArchiveBasics, parseHazardBotConfig];
 
 function OCAInfo(){
-    mw.notify(OCAStatus);
+    const OCAInfoMsg = document.createElement('p');
+    OCAInfoMsg.innerHTML = `<b>${OCALoading}</b>${OCAStatus}`;
+    mw.notify(OCAInfoMsg, { title: 'OneClickArchiver status', tag: 'OCAstatus', autoHide: false });
+}
+
+async function getPageSizeInfo(pageName, headerLevel){
+    const api = new mw.Api();
+    const [ pageData, pageParse ] = await Promise.all([
+        api.get({ // this is for page byte size
+            action: 'query',
+            prop: 'revisions',
+            rvlimit: 1,
+            rvprop: [ 'size', 'content' ],
+            titles: pageName,
+            list: 'usercontribs',
+            uclimit: 1,
+            ucprop: 'timestamp',
+            ucuser: config.wgRelevantUserName || 'Example',
+            rawcontinue: '',
+        }),
+        api.get({ // this is for number of sections
+            action: 'parse',
+            page: pageName,
+            prop: 'tocdata',
+        }).catch( error => {
+            // catch if page doesn't exist
+            if ( error === 'missingtitle' ) {
+                return { parse: { tocdata: { sections: [] } } };
+            }
+            // otherwise, it's a real error
+            throw error;
+        })
+    ]);
+
+    const page = Object.values( pageData?.query?.pages || {} )[0];
+    const pageBytes = parseInt( page?.revisions?.[ 0 ]?.size, 10 ) || -1;
+
+    const sections = pageParse?.parse?.tocdata?.sections || [];
+    const TOClevel = headerLevel - 1; // TOC level is one below headings generally (i.e. h2 is at the top level)
+    const pageSections = sections.filter( s => parseInt(s.tocLevel, 10) === TOClevel ).length;
+
+    return [pageBytes, pageSections];
 }
 
 async function loadOCA(){
-	if ( determinePageArchivability() ) {
-		var pageid = config.wgArticleId;
-		const pageSection0 = await new mw.Api().get( {
-			action: 'query',
-			prop: [ 'revisions', 'info' ],
-			rvsection: 0,
-			rvprop: 'content',
-			pageids: pageid,
-			indexpageids: 1,
-			rawcontinue: ''
-		})
-        
-        const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
-
-        var archiveConfig;
-        for (const configLoader of archiveConfigsToTry){
-            archiveConfig = configLoader(content0);
-            if (archiveConfig){
-                OCAStatus = OCAStatus + `\nOCA is using configuration from template {{${archiveConfig.templateName}}}.`;
-                break;
-            }
-        }
-        if (!archiveConfig){ // no valid config
-            OCAStatus = "OCA is enabled on this page; however, OCA could not find any existing archiving configuration.";
-            return;
-        }
-
-        const currentArchiveName = archiveConfig.getCurrentArchiveName();
-
-        const api = new mw.Api();
-        const [ currentArchivePageData, currentArchivePageParse ] = await Promise.all([
-            api.get({ // this is for page byte size
-                action: 'query',
-                prop: 'revisions',
-                rvlimit: 1,
-                rvprop: [ 'size', 'content' ],
-                titles: currentArchiveName,
-                list: 'usercontribs',
-                uclimit: 1,
-                ucprop: 'timestamp',
-                ucuser: config.wgRelevantUserName || 'Example',
-                rawcontinue: '',
-            }),
-            api.get({ // this is for number of sections
-                action: 'parse',
-                page: currentArchiveName,
-                prop: 'tocdata',
-            }).catch( error => {
-                // catch if page doesn't exist
-                if ( error === 'missingtitle' ) {
-                    return { parse: { tocdata: { sections: [] } } };
-                }
-                // otherwise, it's a real error
-                throw error;
-            })
-        ]);
-
-        const page = Object.values( currentArchivePageData?.query?.pages || {} )[0];
-        const currentArchiveBytes = parseInt( page?.revisions?.[ 0 ]?.size, 10 ) || -1;
-
-        const sections = currentArchivePageParse?.parse?.tocdata?.sections || [];
-        const TOClevel = archiveConfig.headerLevel - 1; // TOC level is one below headings generally (i.e. h2 is at the top level)
-        const currentArchiveSections = sections.filter( s => parseInt(s.tocLevel, 10) === TOClevel ).length;
-
-        const archivePageToWrite = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections);
-
-        addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveName, archiveConfig);
-
-	}
+    OCALoading = "OCA is loading.<br />";
     if (mw.config.get( 'wgNamespaceNumber' ) > 0){ // don't waste space on pages in mainspace
 		const OCAInfoButton = mw.util.addPortletLink(
 			'p-cactions',
@@ -783,6 +738,61 @@ async function loadOCA(){
             OCAInfo();
         });
     }
+
+	if ( determinePageArchivability() ) {
+		var pageid = config.wgArticleId;
+		const pageSection0 = await new mw.Api().get( {
+			action: 'query',
+			prop: [ 'revisions', 'info' ],
+			rvsection: 0,
+			rvprop: 'content',
+			pageids: pageid,
+			indexpageids: 1,
+			rawcontinue: ''
+		})
+        
+        const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
+
+        OCALoading = "OCA is looking for configuration.<br />\n";
+        var archiveConfig;
+        for (const configLoader of archiveConfigsToTry){
+            archiveConfig = configLoader(content0);
+            if (archiveConfig){
+                const templateQualifiedName = archiveConfig.templateName.includes(":") ? archiveConfig.templateName : "Template:" + archiveConfig.templateName;
+                OCAStatus = OCAStatus + `\nOCA is using configuration from template {{<a href="/wiki/${templateQualifiedName}">${archiveConfig.templateName}</a>}}.`;
+                break;
+            }
+        }
+        if (!archiveConfig){ // no valid config
+            OCAStatus = "OCA is enabled on this page; however, OCA could not find any existing archiving configuration.";
+            OCALoading = "";
+            return;
+        }
+
+        const initialArchiveName = archiveConfig.getCurrentArchiveName();
+
+        OCALoading = "OCA is looking for the next valid archive page.<br />\n";
+        // we can't rely on the counter being the actual archive number
+        // for one, it could just be absent or inaccurate
+        // also, ClueBot style bots don't use it in the same way
+        // they only use it for the first page to try, and *don't* increment it automatically
+        var archiveNameLast;
+        var archiveNameCurrent = initialArchiveName;
+        var counterExtra = 0;
+        while (archiveNameLast !== archiveNameCurrent){
+            archiveNameLast = archiveNameCurrent;
+            const [ currentArchiveBytes, currentArchiveSections ] = await getPageSizeInfo(archiveNameLast, archiveConfig.headerLevel);
+            archiveNameCurrent = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra);
+            counterExtra++;
+        }
+
+        const archivePageToWrite = archiveNameCurrent;
+
+        OCALoading = "OCA is adding archive links.<br />\n";
+        addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, initialArchiveName, archiveConfig);
+        OCALoading = "";
+
+	}
 }
 
 
