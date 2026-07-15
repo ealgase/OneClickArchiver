@@ -10,7 +10,7 @@ You need to have archiving configuration set up for the script to be enabled. Th
 If multiple templates are present, the first one in this list is used (i.e. MiszaBot config is preferred over ClueBot III).
 
 ### Installation
-See [https://en.wikipedia.org/wiki/User:Elli/OneClickArchiver](the documentation page on English Wikipedia).
+See [the documentation page on English Wikipedia](https://en.wikipedia.org/wiki/User:Elli/OneClickArchiver).
 
 If you want to install on a different wiki, add the following to your `common.js`:
 ```javascript
