@@ -7,9 +7,10 @@
 // <nowiki>
 
 // configuration and i18n
-i18n_archive_link_text = 'Archive';
-i18n_archive_to_text = 'Archive to:';
+const i18n_archive_link_text = 'Archive';
+const i18n_archive_to_text = 'Archive to:';
 
+var linkSize;
 if (!window.OCALinkSize){
 	linkSize = 0.6;
 } else{
@@ -160,8 +161,8 @@ function determinePageArchivability(){
         OCAStatus = 'OCA is disabled: page is in category "Pages that should not be manually archived"';
         return false;
     }
-    if (categories.includes(nonTalkSignedCategoryName)){} return true; // category for talk-like pages
-    if (Boolean(document.querySelector( '#ca-addsection' ))) return true; // only present on talkpages
+    if (categories.includes(nonTalkSignedCategoryName)) return true; // category for talk-like pages
+    if (document.querySelector( '#ca-addsection' )) return true; // only present on talkpages
     return false // fallback
 }
 
@@ -179,7 +180,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     const arcProg = document.querySelector('.arcProg');
 
     function printMessage(message, color){
-        if (!color){color = "black"};
+        if (!color){color = "black"}
         arcProg.insertAdjacentHTML('beforeend',`<div style="color: ${color}">${message}</div>`);
     }
 
@@ -214,7 +215,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     if ( dnauDate > Date.now() ) {
         document.querySelectorAll('.arcProg, .overlay').forEach(element => element.remove());
         const dnauAbortMsg = document.createElement('p');
-        dnauAbortMsg.innerHTML = 'This section has been marked \"Do Not Archive Until\" ' + dnau + ', so archiving was aborted.<br /><br /><span style="font-size: larger;">Please, see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span>';
+        dnauAbortMsg.innerHTML = `This section has been marked "Do Not Archive Until" ${dnau}, so archiving was aborted.<br /><br /><span style="font-size: larger;">Please see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span>`;
         mw.notify( dnauAbortMsg, { title: 'OneClickArchiver aborted!', tag: 'OCAdnau', autoHide: false } );
         return;
     }
@@ -266,7 +267,7 @@ function addArchiveLinks(headerLevel, archiveName, archivePageSize, archiveConfi
         var sectionNumber = 0;
         if (section && !section.includes('T')) { // we don't want transcluded sections
             sectionNumber = parseInt(section, 10);
-        } else{ return };
+        } else{ return }
 
         // build our button
         const archiveButtonWrapper = document.createElement('div');
@@ -361,7 +362,7 @@ class archiveBotConfigMisza extends archiveBotConfig{
         // will capture anything that looks like a Python variable placeholder
         const placeholderRegex = /%\((\w+)\)(0?\d+)?([ds])/g;
 
-        return inputTemplate.replace(placeholderRegex, (match, key, pad, type) => {
+        return inputTemplate.replace(placeholderRegex, (match, key, pad) => {
             // if we don't have something for this placeholder, skip
             if (!(key in values)) return match;
 
@@ -465,7 +466,7 @@ function parseHazardBotConfig(pageText){ // https://www.wikidata.org/wiki/User:H
 
 // this is used for ClueBot III
 class archiveBotConfigClueBotIII extends archiveBotConfig{
-    _phpDate(format, timestamp) { // this one is vibecoded (implementing this manually would be a profound waste of time).
+    _phpDate(format, timestamp) { // this function was vibecoded (implementing this manually would be a profound waste of time).
         const date = timestamp !== undefined 
             ? (timestamp instanceof Date ? timestamp : new Date(timestamp * 1000)) 
             : new Date();
@@ -699,9 +700,7 @@ function OCAInfo(){
 
 async function loadOCA(){
 	if ( determinePageArchivability() ) {
-		var OCAstate = mw.user.options.get( 'userjs-OCA-enabled', 'true' );
 		var pageid = config.wgArticleId;
-		var errorLog = { errorCount: 0 };
 		const pageSection0 = await new mw.Api().get( {
 			action: 'query',
 			prop: [ 'revisions', 'info' ],
@@ -711,7 +710,6 @@ async function loadOCA(){
 			indexpageids: 1,
 			rawcontinue: ''
 		})
-        var archiveNum;
         
         const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
 
@@ -721,7 +719,7 @@ async function loadOCA(){
             if (archiveConfig){
                 OCAStatus = OCAStatus + `\nOCA is using configuration from template {{${archiveConfig.templateName}}}.`;
                 break;
-            };
+            }
         }
         if (!archiveConfig){ // no valid config
             OCAStatus = "OCA is enabled on this page; however, OCA could not find any existing archiving configuration.";
