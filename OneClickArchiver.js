@@ -173,8 +173,9 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
 
     const arcProg = document.querySelector('.arcProg');
 
-    function printMessage(message){
-        arcProg.insertAdjacentHTML('beforeend',`<div>${message}</div>`);
+    function printMessage(message, color){
+        if (!color){color = "black"};
+        arcProg.insertAdjacentHTML('beforeend',`<div style="color: ${color}">${message}</div>`);
     }
 
     const pageid = config.wgArticleId;
@@ -192,7 +193,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     });
 
     var sectionContent = sectionResponse.query.pages[ pageid ].revisions[ 0 ][ '*' ];
-    printMessage("Section content retrieved.");
+    printMessage("Section content retrieved.", "green");
 
     var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}),? ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
     var dnauDate;
@@ -232,7 +233,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
         summary: '/* '+sectionName+' */ archived using [[User:Elli/OneClickArchiver|OneClickArchiver]])'
     });
     
-    printMessage("Successfully added to archive. Removing from source page.");
+    printMessage("Successfully added to archive. Removing from source page.", "green");
     await new mw.Api().postWithToken( 'edit', {
         action: 'edit',
         section: sectionNumber,
@@ -240,7 +241,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
         text: '',
         summary: '[[User:Elli/OneClickArchiver|OneClickArchived]] "' + sectionName + '" to [[' + archiveName + ']]'
     })
-    printMessage("Successfully removed from source page. Updating archive config if needed...");
+    printMessage("Successfully removed from source page. Updating archive config if needed...", "green");
     await archiveConfig.updateConfigIfNeeded(pageid);
     location.reload();
 }
@@ -381,7 +382,7 @@ class archiveBotConfigMisza extends archiveBotConfig{
         this.parsedCounter = counter; // super makes sure counter is a valid number to avoid "Archive undefined". but we store this separately to know if our template is broken.
         this.archivePythonTemplate = archive;
         this.archiveSizeLimitType = null;
-        if (maxarchivesize.endsWith("T")){
+        if (maxarchivesize?.endsWith("T")){
             this.archiveSizeThreadLimit = parseInt(maxarchivesize.slice(0, -1));
             if (this.archiveSizeThreadLimit) this.archiveSizeLimitType = "threads"; // if we fail to parse then we keep the null value
         } else {
@@ -438,7 +439,17 @@ function parseMiszaBotConfig(pageText){
     return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
 }
 
-// this is used for Misza-compatible bots (e.g. Hazard-Bot on Wikidata)
+// other Misza-likes
+function parseArchiveBasics(pageText){ // https://en.wikipedia.org/wiki/Template:Archive_basics
+    const templateName = "Archive basics";
+    const content = findTemplateInPage(pageText, templateName);
+    if (!content) return;
+    const config = parseTemplateParams(content);
+    return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
+}
+
+
+// this is used for ClueBot III
 class archiveBotConfigClueBotIII extends archiveBotConfig{
     _phpDate(format, timestamp) { // this one is vibecoded (implementing this manually would be a profound waste of time).
         const date = timestamp !== undefined 
@@ -604,10 +615,10 @@ class archiveBotConfigClueBotIII extends archiveBotConfig{
         return this._phpDate(dateStringCountersApplied);
     }
 
-    constructor(archiveprefix, format, header, counter, headerlevel, maxarchsize, templateName, pageText){
+    constructor(archiveprefix, format, header, numberstart, headerlevel, maxarchsize, templateName, pageText){
         if (!headerlevel) headerlevel=2; // default
         if (!header) header="{{Archive}}"; // default
-        super(counter, header, headerlevel);
+        super(numberstart, header, headerlevel);
         this.archiveprefix = archiveprefix;
         this.format = format;
         this.maxarchsize = maxarchsize || Infinity; // default to no limit
@@ -659,12 +670,14 @@ function parseClueBotIIIConfig(pageText){
     // format - argument to PHP's date() function and/or "%%i" for numbered
     /// optional params
     // header - text to put at the top of new archives. default "{{Archive}}"
-    // counter - value for %%i
+    // numberstart - value for %%i
     // headerlevel - header level of sections. default 2
     // maxarchsize - max size before rolling over to new archive. in bytes only.
 
-    return new archiveBotConfigClueBotIII(config.archiveprefix, config.format, config.header, config.counter, config.headerlevel, config.maxarchsize, templateName, pageText)
+    return new archiveBotConfigClueBotIII(config.archiveprefix, config.format, config.header, config.numberstart, config.headerlevel, config.maxarchsize, templateName, pageText)
 }
+
+const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig, parseArchiveBasics];
 
 async function loadOCA(){
 	if ( determinePageArchivability() ) {
@@ -735,7 +748,6 @@ async function loadOCA(){
 	}
 }
 
-const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig];
 
 if (document.readyState !== 'loading') {
     loadOCA();
