@@ -148,14 +148,19 @@ var config = mw.config.get([
 	'wgRelevantUserName'
 ]);
 
-
+var OCAStatus;
 function determinePageArchivability(){
     const categories = config.wgCategories;
     const noManualArchivingCategoryName = 'Pages that should not be manually archived';
     const nonTalkSignedCategoryName = 'Non-talk pages that are automatically signed';
 
-    if (categories.includes(noManualArchivingCategoryName)) return false; // manual archiving disabled
-    if (categories.includes(nonTalkSignedCategoryName)) return true; // category for talk-like pages
+    OCAStatus = "OCA is enabled.";
+
+    if (categories.includes(noManualArchivingCategoryName)){// manual archiving disabled
+        OCAStatus = 'OCA is disabled: page is in category "Pages that should not be manually archived"';
+        return false;
+    }
+    if (categories.includes(nonTalkSignedCategoryName)){} return true; // category for talk-like pages
     if (Boolean(document.querySelector( '#ca-addsection' ))) return true; // only present on talkpages
     return false // fallback
 }
@@ -439,7 +444,7 @@ function parseMiszaBotConfig(pageText){
     return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
 }
 
-// other Misza-likes
+//// other Misza-likes
 function parseArchiveBasics(pageText){ // https://en.wikipedia.org/wiki/Template:Archive_basics
     const templateName = "Archive basics";
     const content = findTemplateInPage(pageText, templateName);
@@ -447,6 +452,15 @@ function parseArchiveBasics(pageText){ // https://en.wikipedia.org/wiki/Template
     const config = parseTemplateParams(content);
     return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
 }
+function parseHazardBotConfig(pageText){ // https://www.wikidata.org/wiki/User:Hazard-Bot/Archiver
+    const templateName = "User:Hazard-Bot/Archiver";
+    const content = findTemplateInPage(pageText, templateName);
+    if (!content) return;
+    const config = parseTemplateParams(content);
+    return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
+}
+
+//// end other Misza-likes
 
 
 // this is used for ClueBot III
@@ -677,7 +691,11 @@ function parseClueBotIIIConfig(pageText){
     return new archiveBotConfigClueBotIII(config.archiveprefix, config.format, config.header, config.numberstart, config.headerlevel, config.maxarchsize, templateName, pageText)
 }
 
-const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig, parseArchiveBasics];
+const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig, parseArchiveBasics, parseHazardBotConfig];
+
+function OCAInfo(){
+    mw.notify(OCAStatus);
+}
 
 async function loadOCA(){
 	if ( determinePageArchivability() ) {
@@ -700,9 +718,15 @@ async function loadOCA(){
         var archiveConfig;
         for (const configLoader of archiveConfigsToTry){
             archiveConfig = configLoader(content0);
-            if (archiveConfig) break;
+            if (archiveConfig){
+                OCAStatus = OCAStatus + `\nOCA is using configuration from template {{${archiveConfig.templateName}}}.`;
+                break;
+            };
         }
-        if (!archiveConfig) return; // no valid config
+        if (!archiveConfig){ // no valid config
+            OCAStatus = "OCA is enabled on this page; however, OCA could not find any existing archiving configuration.";
+            return;
+        }
 
         const currentArchiveName = archiveConfig.getCurrentArchiveName();
 
@@ -746,6 +770,20 @@ async function loadOCA(){
         addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveBytes, archiveConfig);
 
 	}
+    if (mw.config.get( 'wgNamespaceNumber' ) > 0){ // don't waste space on pages in mainspace
+		const OCAInfoButton = mw.util.addPortletLink(
+			'p-cactions',
+			'#archiverLink',
+			"OCA info",
+			'pt-OCA',
+			"Information about how OneClickArchiver is behaving on this page",
+			null
+		);
+        OCAInfoButton.addEventListener('click', function(e){
+            e.preventDefault();
+            OCAInfo();
+        });
+    }
 }
 
 
