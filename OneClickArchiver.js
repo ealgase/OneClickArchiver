@@ -7,8 +7,46 @@
 // <nowiki>
 
 // configuration and i18n
-const i18n_archive_link_text = 'Archive';
-const i18n_archive_to_text = 'Archive to:';
+const ui_strings = {};
+ui_strings['en'] = {
+    archive_link_text: 'Archive',
+    archive_to_text: 'Archive to:',
+
+    oca_status_enabled: 'OCA is enabled.',
+    oca_status_disabled_category: 'OCA is disabled: page is in category <a href="/wiki/Category:$1" target="_blank">$1</a>.',
+    oca_status_disabled_nottalk: 'OCA is disabled: this does not appear to be a talkpage (consider adding __NEWSECTIONLINK__ or [[Category:Non-talk pages that are automatically signed]]).',
+    oca_status_using_template: 'OCA is using configuration from template',
+    oca_status_no_config: 'OCA is enabled on this page; however, OCA could not find any existing archiving configuration.',
+
+    oca_loading_init: 'OCA is loading.',
+    oca_loading_looking_for_config: 'OCA is looking for configuration.',
+    oca_loading_looking_for_archive: 'OCA is looking for the next valid archive page.',
+    oca_loading_adding_archive_links: 'OCA is adding archive links.',
+
+    oca_status_heading: 'OneClickArchiver status',
+
+    oca_info_button_name: 'OCA info',
+    oca_info_button_description: 'Information about how OneClickArchiver is behaving on this page',
+
+    archivethis_retrieving_content: 'Retrieving section content.',
+    archivethis_content_retrieved: 'Section content retrieved.',
+    archivethis_dnau_message: 'This section has been marked "Do Not Archive Until" $1, so archiving was aborted.',
+    archivethis_dnau_see_docs: 'Please see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver" target="_blank">the documentation</a> for details.',
+    archivethis_dnau_aborted: 'OneClickArchiver aborted!',
+    archivethis_writing_existing_page: 'Writing to existing archive page <a href="/wiki/$1" target="_blank">$1</a>.',
+    archivethis_writing_new_page: 'Writing to new archive page <a class="new" href="/wiki/$1" target="_blank">$1</a>.',
+    archivethis_es_archived_using: 'archived using [[User:Elli/OneClickArchiver|OneClickArchiver]]',
+    archivethis_es_to: 'to',
+    archivethis_successfully_added: 'Successfully added to archive. Removing from source page.',
+    archivethis_success: 'Successfully removed from source page. Updating archive config if needed...',
+
+}
+const ui_lang = window.OCAUILang ?? 'en'; // default to English
+const ui_str = ui_strings[ui_lang];
+if (!ui_str){alert("You are trying to use OCA with a language that does not exist! Script will not work.")} // fallback to avoid confusion if someone typo'd their language name
+
+const no_manual_archiving_categories = ['Pages that should not be manually archived'];
+const automatically_signed_nontalk_categories = ['Non-talk pages that are automatically signed']
 
 var linkSize;
 if (!window.OCALinkSize){
@@ -145,18 +183,22 @@ var config = mw.config.get([
 var OCAStatus, OCALoading;
 function determinePageArchivability(){
     const categories = config.wgCategories;
-    const noManualArchivingCategoryName = 'Pages that should not be manually archived';
-    const nonTalkSignedCategoryName = 'Non-talk pages that are automatically signed';
 
-    OCAStatus = "OCA is enabled.";
+    OCAStatus = ui_str.oca_status_enabled;
 
-    if (categories.includes(noManualArchivingCategoryName)){// manual archiving disabled
-        OCAStatus = 'OCA is disabled: page is in category "Pages that should not be manually archived"';
-        return false;
+    for (const categoryName of no_manual_archiving_categories) {
+        if (categories.includes(categoryName)){// manual archiving disabled
+            OCAStatus = ui_str.oca_status_disabled_category.replaceAll('$1', noManualArchivingCategoryName);
+            return false;
+        }
     }
-    if (categories.includes(nonTalkSignedCategoryName)) return true; // category for talk-like pages
+
+    for (const categoryName of automatically_signed_nontalk_categories) {
+        if (categories.includes(categoryName)) return true;
+    }
+
     if (document.querySelector( '#ca-addsection' )) return true; // only present on talkpages
-    OCAStatus = 'OCA is disabled: this does not appear to be a talkpage (consider adding __NEWSECTIONLINK__ or [[Category:Non-talk pages that are automatically signed]]).';
+    OCAStatus = ui_str.oca_status_disabled_nottalk;
     return false // fallback
 }
 
@@ -181,7 +223,7 @@ async function archiveThis(sectionNumber, archiveName, currentArchiveName, secti
     const pageid = config.wgArticleId;
 
     const api = new mw.Api();
-    printMessage("Retrieving section content.")
+    printMessage(ui_str.archivethis_retrieving_content)
     const sectionResponse = await api.get({
         action: 'query',
         pageids: pageid,
@@ -193,7 +235,7 @@ async function archiveThis(sectionNumber, archiveName, currentArchiveName, secti
     });
 
     var sectionContent = sectionResponse.query.pages[ pageid ].revisions[ 0 ][ '*' ];
-    printMessage("Section content retrieved.", "green");
+    printMessage(ui_str.archivethis_content_retrieved, "green");
 
     var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}),? ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
     var dnauDate;
@@ -209,17 +251,17 @@ async function archiveThis(sectionNumber, archiveName, currentArchiveName, secti
     if ( dnauDate > Date.now() ) {
         document.querySelectorAll('.arcProg, .overlay').forEach(element => element.remove());
         const dnauAbortMsg = document.createElement('p');
-        dnauAbortMsg.innerHTML = `This section has been marked "Do Not Archive Until" ${dnau}, so archiving was aborted.<br /><br /><span style="font-size: larger;">Please see <a href="/wiki/User:Elli/OneClickArchiver" title="User:Elli/OneClickArchiver">the documentation</a> for details.</span>`;
-        mw.notify( dnauAbortMsg, { title: 'OneClickArchiver aborted!', tag: 'OCAdnau', autoHide: false } );
+        dnauAbortMsg.innerHTML = `${ui_str.archivethis_dnau_message.replaceAll('$1', dnau)}<br /><br /><span style="font-size: larger;">${ui_str.archivethis_dnau_see_docs}</span>`;
+        mw.notify( dnauAbortMsg, { title: ui_str.archivethis_dnau_aborted, tag: 'OCAdnau', autoHide: false } );
         return;
     }
 
     if ( archiveName == currentArchiveName ) {
         sectionContent = '\n\n{{Clear}}\n' + sectionContent;
-        printMessage(`Writing to existing archive page ${archiveName}`);
+        printMessage(ui_str.archivethis_writing_existing_page.replaceAll('$1', archiveName));
     } else {
         sectionContent = archiveConfig.archivePageHeader + '\n\n' + sectionContent;
-        printMessage(`Creating new archive page ${archiveName}`);
+        printMessage(ui_str.archivethis_writing_new_page.replaceAll('$1', archiveName));
     }
 
     if ( dnau != null ) {
@@ -230,18 +272,18 @@ async function archiveThis(sectionNumber, archiveName, currentArchiveName, secti
         action: 'edit',
         title: archiveName,
         appendtext: sectionContent,
-        summary: '/* '+sectionName+' */ archived using [[User:Elli/OneClickArchiver|OneClickArchiver]])'
+        summary: `/* ${sectionName} */ ${ui_str.archivethis_es_archived_using}`
     });
     
-    printMessage("Successfully added to archive. Removing from source page.", "green");
+    printMessage(ui_str.archivethis_successfully_added, "green");
     await new mw.Api().postWithToken( 'edit', {
         action: 'edit',
         section: sectionNumber,
         pageid: pageid,
         text: '',
-        summary: '[[User:Elli/OneClickArchiver|OneClickArchived]] "' + sectionName + '" to [[' + archiveName + ']]'
+        summary: `[[User:Elli/OneClickArchiver|OneClickArchived]] "${sectionName}" ${ui_str.archivethis_es_to} [[${archiveName}]]`
     })
-    printMessage("Successfully removed from source page. Updating archive config if needed...", "green");
+    printMessage(ui_str.archivethis_success, "green");
     await archiveConfig.updateConfigIfNeeded(pageid);
     location.reload();
 }
@@ -274,8 +316,8 @@ function addArchiveLinks(headerLevel, archiveName, currentArchiveName, archiveCo
         archiveButton.href = '#archiverLink';
         archiveButton.class = 'archiverLink';
         archiveButton.id = sectionNumber;
-        archiveButton.title = `${i18n_archive_to_text} ${archiveName}`
-        archiveButton.innerText = i18n_archive_link_text;
+        archiveButton.title = `${ui_str.archive_to_text} ${archiveName}`
+        archiveButton.innerText = ui_str.archive_link_text;
 
         archiveButton.addEventListener('click', function(e){
             e.preventDefault();
@@ -723,14 +765,14 @@ async function getPageSizeInfo(pageName, headerLevel){
 }
 
 async function loadOCA(){
-    OCALoading = "OCA is loading.<br />";
+    OCALoading = `${ui_str.oca_loading_init}<br />`;
     if (mw.config.get( 'wgNamespaceNumber' ) > 0){ // don't waste space on pages in mainspace
 		const OCAInfoButton = mw.util.addPortletLink(
 			'p-cactions',
 			'#archiverLink',
-			"OCA info",
+			ui_str.oca_info_button_name,
 			'pt-OCA',
-			"Information about how OneClickArchiver is behaving on this page",
+            ui_str.oca_info_button_description,
 			null
 		);
         OCAInfoButton.addEventListener('click', function(e){
@@ -753,25 +795,25 @@ async function loadOCA(){
         
         const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
 
-        OCALoading = "OCA is looking for configuration.<br />\n";
+        OCALoading = `${ui_str.oca_loading_looking_for_config}<br />\n`;
         var archiveConfig;
         for (const configLoader of archiveConfigsToTry){
             archiveConfig = configLoader(content0);
             if (archiveConfig){
                 const templateQualifiedName = archiveConfig.templateName.includes(":") ? archiveConfig.templateName : "Template:" + archiveConfig.templateName;
-                OCAStatus = OCAStatus + `\nOCA is using configuration from template {{<a href="/wiki/${templateQualifiedName}">${archiveConfig.templateName}</a>}}.`;
+                OCAStatus = OCAStatus + `\n${ui_str.oca_status_using_template} {{<a href="/wiki/${templateQualifiedName}">${archiveConfig.templateName}</a>}}.`;
                 break;
             }
         }
         if (!archiveConfig){ // no valid config
-            OCAStatus = "OCA is enabled on this page; however, OCA could not find any existing archiving configuration.";
+            OCAStatus = ui_str.oca_status_no_config;
             OCALoading = "";
             return;
         }
 
         const initialArchiveName = archiveConfig.getCurrentArchiveName();
 
-        OCALoading = "OCA is looking for the next valid archive page.<br />\n";
+        OCALoading = `${ui_str.oca_loading_looking_for_archive}<br />\n`;
         // we can't rely on the counter being the actual archive number
         // for one, it could just be absent or inaccurate
         // also, ClueBot style bots don't use it in the same way
@@ -788,7 +830,7 @@ async function loadOCA(){
 
         const archivePageToWrite = archiveNameCurrent;
 
-        OCALoading = "OCA is adding archive links.<br />\n";
+        OCALoading = `${ui_str.oca_loading_adding_archive_links}<br />\n`;
         addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, initialArchiveName, archiveConfig);
         OCALoading = "";
 
