@@ -163,6 +163,7 @@ function determinePageArchivability(){
     }
     if (categories.includes(nonTalkSignedCategoryName)) return true; // category for talk-like pages
     if (document.querySelector( '#ca-addsection' )) return true; // only present on talkpages
+    OCAStatus = 'OCA is disabled: this does not appear to be a talkpage (consider adding __NEWSECTIONLINK__ or [[Category:Non-talk pages that are automatically signed]]).';
     return false // fallback
 }
 
