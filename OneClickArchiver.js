@@ -166,7 +166,7 @@ function determinePageArchivability(){
     return false // fallback
 }
 
-async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionName, archiveConfig) {
+async function archiveThis(sectionNumber, archiveName, currentArchiveName, sectionName, archiveConfig) {
     document.body.insertAdjacentHTML(
         'beforeend', 
         '<div class="overlay" style="background-color: #000000; opacity: 0.4; position: fixed; top: 0px; left: 0px; width: 100%; height: 100%; z-index: 500;"></div>'
@@ -220,12 +220,12 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
         return;
     }
 
-    if ( archivePageSize <= 0  ) {
-        sectionContent = archiveConfig.archivePageHeader + '\n\n' + sectionContent;
-        printMessage(`Creating new archive page ${archiveName}`);
-    } else {
+    if ( archiveName == currentArchiveName ) {
         sectionContent = '\n\n{{Clear}}\n' + sectionContent;
         printMessage(`Writing to existing archive page ${archiveName}`);
+    } else {
+        sectionContent = archiveConfig.archivePageHeader + '\n\n' + sectionContent;
+        printMessage(`Creating new archive page ${archiveName}`);
     }
 
     if ( dnau != null ) {
@@ -252,7 +252,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     location.reload();
 }
 
-function addArchiveLinks(headerLevel, archiveName, archivePageSize, archiveConfig){
+function addArchiveLinks(headerLevel, archiveName, currentArchiveName, archiveConfig){
     document.querySelectorAll('div.mw-heading' + headerLevel).forEach(function(sectionHeadingDiv) {
         const sectionHeadingElement = sectionHeadingDiv.querySelector('h' + headerLevel);
 
@@ -285,7 +285,7 @@ function addArchiveLinks(headerLevel, archiveName, archivePageSize, archiveConfi
 
         archiveButton.addEventListener('click', function(e){
             e.preventDefault();
-            archiveThis(sectionNumber, archiveName, archivePageSize, sectionName, archiveConfig);
+            archiveThis(sectionNumber, archiveName, currentArchiveName, sectionName, archiveConfig);
         })
 
         archiveButtonWrapper.append(archiveButton);
@@ -765,7 +765,7 @@ async function loadOCA(){
 
         const archivePageToWrite = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections);
 
-        addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveBytes, archiveConfig);
+        addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, currentArchiveName, archiveConfig);
 
 	}
     if (mw.config.get( 'wgNamespaceNumber' ) > 0){ // don't waste space on pages in mainspace
