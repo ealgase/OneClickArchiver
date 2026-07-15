@@ -164,12 +164,6 @@ function determinePageArchivability(){
 }
 
 async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionName, archiveConfig) {
-    const mSection = 'retrieving section content...';
-    const mPosting = '<span style="color: #004400">Content retrieved,</span> performing edits...';
-    const mPosted = '<span style="color: #008800">Archive appended...</span>';
-    const mCleared = '<span style="color: #008800">Section cleared...</span>';
-    const mReloading = '<span style="color: #000088">All done! </span><a href="#archiverLink" onClick="javascript:location.reload();" title="Reload page">Reloading</a>...';
-
     document.body.insertAdjacentHTML(
         'beforeend', 
         '<div class="overlay" style="background-color: #000000; opacity: 0.4; position: fixed; top: 0px; left: 0px; width: 100%; height: 100%; z-index: 500;"></div>'
@@ -182,14 +176,14 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
 
     const arcProg = document.querySelector('.arcProg');
 
-    arcProg.insertAdjacentHTML(
-        'beforeend', 
-        `<div>Archive name <span style="font-weight: normal; color: #003366;">${archiveName}</span> <span style="color: darkgreen;">found</span>, ${mSection} (${archivePageSize}b)</div>`
-    );
+    function printMessage(message){
+        arcProg.insertAdjacentHTML('beforeend',`<div>${message}</div>`);
+    }
 
     const pageid = config.wgArticleId;
 
     const api = new mw.Api();
+    printMessage("Retrieving section content.")
     const sectionResponse = await api.get({
         action: 'query',
         pageids: pageid,
@@ -201,7 +195,7 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     });
 
     var sectionContent = sectionResponse.query.pages[ pageid ].revisions[ 0 ][ '*' ];
-    $( '.arcProg' ).append( '<div>' + mPosting + '</div>' );
+    printMessage("Section content retrieved.");
 
     var dnau = sectionContent.match( /<!-- \[\[User:DoNotArchiveUntil\]\] ([\d]{2}):([\d]{2}), ([\d]{1,2}) (January|February|March|April|May|June|July|August|September|October|November|December) ([\d]{4}) \(UTC\) -->/ );
     var dnauDate;
@@ -223,10 +217,11 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
     }
 
     if ( archivePageSize <= 0  ) {
-        sectionContent = archiveHeader + '\n\n' + sectionContent;
-        mPosted = '<span style="color: #008800">Archive created...</span>';
+        sectionContent = archiveConfig.archivePageHeader + '\n\n' + sectionContent;
+        printMessage(`Creating new archive page ${archiveName}`);
     } else {
         sectionContent = '\n\n{{Clear}}\n' + sectionContent;
+        printMessage(`Writing to existing archive page ${archiveName}`);
     }
 
     if ( dnau != null ) {
@@ -240,19 +235,16 @@ async function archiveThis(sectionNumber, archiveName, archivePageSize, sectionN
         summary: '/* '+sectionName+' */ archived using [[User:Elli/OneClickArchiver|OneClickArchiver]])'
     });
     
-    $( '.arcProg' ).append( '<div class="archiverPosted">' + mPosted + '</div>' );
+    printMessage("Successfully added to archive. Removing from source page.");
     new mw.Api().postWithToken( 'edit', {
         action: 'edit',
         section: sectionNumber,
         pageid: pageid,
         text: '',
         summary: '[[User:Elli/OneClickArchiver|OneClickArchived]] "' + sectionName + '" to [[' + archiveName + ']]'
-    } ).done( function () {
-        arcProg.insertAdjacentHTML(
-            'beforeend', 
-            `<div>Updating archive config if needed...</div>`
-        );
-        archiveConfig.updateConfigIfNeeded(pageid);
+    } ).done( async function () {
+        printMessage("Successfully removed from source page. Updating archive config if needed...");
+        await archiveConfig.updateConfigIfNeeded(pageid);
         location.reload();
     } );
 }
@@ -315,7 +307,7 @@ class archiveBotConfig{
         throw new Error("You must implement this method!")
     }
 
-    updateConfigIfNeeded(){
+    async updateConfigIfNeeded(){
         throw new Error("You must implement this method!")
     }
 }
@@ -420,10 +412,10 @@ class archiveBotConfigMisza extends archiveBotConfig{
         return this._applyPythonTemplateSubstitutions(this.archivePythonTemplate, this.toWriteCounter);
     }
 
-    updateConfigIfNeeded(pageid){
+    async updateConfigIfNeeded(pageid){
         const newContent = updateTemplateParamInPage(this.pageText, this.templateName, "counter", this.toWriteCounter);
         if (newContent != this.pageText){
-            new mw.Api().postWithToken( 'edit', {
+            await new mw.Api().postWithToken( 'edit', {
                 action: 'edit',
                 section: 0,
                 pageid: pageid,
@@ -437,9 +429,9 @@ class archiveBotConfigMisza extends archiveBotConfig{
 
 // look for MiszaBot configuration and parse it if it exists
 function parseMiszaBotConfig(pageText){    
-
     const templateName = "User:MiszaBot/config";
     const content = findTemplateInPage(pageText, templateName);
+    if (!content) return;
     const config = parseTemplateParams(content);
     // params we care about:
     // archive - template for archive page name
@@ -450,6 +442,237 @@ function parseMiszaBotConfig(pageText){
     return new archiveBotConfigMisza(config.counter, config.archiveheader, config.archive, config.maxarchivesize, templateName, pageText);
 }
 
+// this is used for Misza-compatible bots (e.g. Hazard-Bot on Wikidata)
+class archiveBotConfigClueBotIII extends archiveBotConfig{
+    _phpDate(format, timestamp) { // this one is vibecoded (implementing this manually would be a profound waste of time).
+        const date = timestamp !== undefined 
+            ? (timestamp instanceof Date ? timestamp : new Date(timestamp * 1000)) 
+            : new Date();
+
+        // Helper to pad numbers (e.g., 2 -> "02")
+        const pad = (val, len = 2) => String(val).padStart(len, '0');
+
+        // Helper to get the day of the year (0-365)
+        const getDayOfYear = (d) => {
+            const start = new Date(d.getFullYear(), 0, 0);
+            const diff = d - start;
+            const oneDay = 1000 * 60 * 60 * 24;
+            return Math.floor(diff / oneDay) - 1;
+        };
+
+        // Helper to get ISO-8601 week number
+        const getISOWeek = (d) => {
+            const target = new Date(d.valueOf());
+            const dayNr = (d.getDay() + 6) % 7;
+            target.setDate(target.getDate() - dayNr + 3);
+            const firstThursday = target.valueOf();
+            target.setMonth(0, 1);
+            if (target.getDay() !== 4) {
+                target.setMonth(0, 1 + ((4 - target.getDay() + 7) % 7));
+            }
+            return 1 + Math.ceil((firstThursday - target) / (604800000));
+        };
+
+        // Helper for Swatch Internet Time (Biel Mean Time: UTC+1)
+        const getSwatchTime = (d) => {
+            const time = d.getTime();
+            const utc1 = time + (d.getTimezoneOffset() * 60000) + 3600000;
+            const bmt = new Date(utc1);
+            const beats = Math.floor((bmt.getHours() * 3600 + bmt.getMinutes() * 60 + bmt.getSeconds() + bmt.getMilliseconds() / 1000) / 86.4);
+            return pad(beats, 3);
+        };
+
+        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+        const formatters = {
+            // --- Day ---
+            d: d => pad(d.getDate()),
+            D: d => days[d.getDay()].substring(0, 3),
+            j: d => d.getDate(),
+            l: d => days[d.getDay()],
+            N: d => d.getDay() === 0 ? 7 : d.getDay(),
+            S: d => {
+                const j = d.getDate();
+                if (j % 10 === 1 && j !== 11) return 'st';
+                if (j % 10 === 2 && j !== 12) return 'nd';
+                if (j % 10 === 3 && j !== 13) return 'rd';
+                return 'th';
+            },
+            w: d => d.getDay(),
+            z: d => getDayOfYear(d),
+
+            // --- Week ---
+            W: d => pad(getISOWeek(d)),
+
+            // --- Month ---
+            F: d => months[d.getMonth()],
+            m: d => pad(d.getMonth() + 1),
+            M: d => months[d.getMonth()].substring(0, 3),
+            n: d => d.getMonth() + 1,
+            t: d => new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(),
+
+            // --- Year ---
+            L: d => (new Date(d.getFullYear(), 1, 29).getMonth() === 1) ? 1 : 0,
+            o: d => {
+                const target = new Date(d.valueOf());
+                target.setDate(target.getDate() - ((d.getDay() + 6) % 7) + 3);
+                return target.getFullYear();
+            },
+            Y: d => d.getFullYear(),
+            y: d => String(d.getFullYear()).slice(-2),
+
+            // --- Time ---
+            a: d => d.getHours() >= 12 ? 'pm' : 'am',
+            A: d => d.getHours() >= 12 ? 'PM' : 'AM',
+            B: d => getSwatchTime(d),
+            g: d => d.getHours() % 12 || 12,
+            G: d => d.getHours(),
+            h: d => pad(d.getHours() % 12 || 12),
+            H: d => pad(d.getHours()),
+            i: d => pad(d.getMinutes()),
+            s: d => pad(d.getSeconds()),
+            u: d => pad(d.getMilliseconds() * 1000, 6),
+            v: d => pad(d.getMilliseconds(), 3),
+
+            // --- Timezone ---
+            e: d => {
+                try {
+                    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+                } catch (e) {
+                    return 'UTC';
+                }
+            },
+            I: d => {
+                const jan = new Date(d.getFullYear(), 0, 1).getTimezoneOffset();
+                const jul = new Date(d.getFullYear(), 6, 1).getTimezoneOffset();
+                return d.getTimezoneOffset() < Math.max(jan, jul) ? 1 : 0;
+            },
+            O: d => {
+                const offset = d.getTimezoneOffset();
+                const sign = offset > 0 ? '-' : '+';
+                const absOffset = Math.abs(offset);
+                return sign + pad(Math.floor(absOffset / 60)) + pad(absOffset % 60);
+            },
+            P: d => {
+                const offset = d.getTimezoneOffset();
+                const sign = offset > 0 ? '-' : '+';
+                const absOffset = Math.abs(offset);
+                return sign + pad(Math.floor(absOffset / 60)) + ':' + pad(absOffset % 60);
+            },
+            p: d => {
+                const offset = d.getTimezoneOffset();
+                if (offset === 0) return 'Z';
+                const sign = offset > 0 ? '-' : '+';
+                const absOffset = Math.abs(offset);
+                return sign + pad(Math.floor(absOffset / 60)) + ':' + pad(absOffset % 60);
+            },
+            T: d => {
+                // Abbreviation like EST, GMT, etc. (Approximated from string representation)
+                const matches = d.toTimeString().match(/\(([^)]+)\)$/);
+                return matches ? matches[1] : 'UTC';
+            },
+            Z: d => -d.getTimezoneOffset() * 60,
+
+            // --- Full Date/Time ---
+            c: d => d.toISOString().replace(/\.\d+Z$/, '') + (d.getTimezoneOffset() === 0 ? 'Z' : formatters.P(d)),
+            r: d => d.toUTCString(), // Closest standardized RFC 2822
+            U: d => Math.floor(d.getTime() / 1000)
+        };
+
+        let result = '';
+        for (let i = 0; i < format.length; i++) {
+            const char = format[i];
+            
+            // Handle PHP-style character escaping with backslash
+            if (char === '\\') {
+                if (i + 1 < format.length) {
+                    result += format[++i];
+                }
+                continue;
+            }
+
+            if (formatters[char]) {
+                result += formatters[char](date);
+            } else {
+                result += char;
+            }
+        }
+
+        return result;
+    }
+
+    _renderPHPDateString(dateString, counter){
+        // first we replace instances of %%i
+        const dateStringCountersApplied = dateString.replace('%%i', counter);
+        return this._phpDate(dateStringCountersApplied);
+    }
+
+    constructor(archiveprefix, format, header, counter, headerlevel, maxarchsize, templateName, pageText){
+        if (!headerlevel) headerlevel=2; // default
+        if (!header) header="{{Archive}}"; // default
+        super(counter, header, headerlevel);
+        this.archiveprefix = archiveprefix;
+        this.format = format;
+        this.maxarchsize = maxarchsize || Infinity; // default to no limit
+        this.templateName = templateName;
+        this.pageText = pageText;
+    }
+
+    getCurrentArchiveName(){ // for getting the CURRENT archive -- this doesn't require any HTTP request; just string substitution
+        const archiveSuffix = this._renderPHPDateString(this.format, this.counter);
+        return this.archiveprefix + archiveSuffix;
+    }
+
+    getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections){ // for getting the archive we are actually going to write to. this requires details from the current archive
+        this.toWriteCounter = this.counter;
+        if (this.format.includes('%%i')){
+            if (currentArchiveBytes >= this.maxarchsize){
+                this.toWriteCounter++;
+            }
+        }
+        console.log(this.counter, this.toWriteCounter);
+        const archiveSuffix = this._renderPHPDateString(this.format, this.toWriteCounter);
+        return this.archiveprefix + archiveSuffix;
+    }
+
+    async updateConfigIfNeeded(pageid){
+        if (this.format.includes('%%i')){
+            const newContent = updateTemplateParamInPage(this.pageText, this.templateName, "counter", this.toWriteCounter);
+            if (newContent != this.pageText){
+                console.log("meow");
+                await new mw.Api().postWithToken( 'edit', {
+                    action: 'edit',
+                    section: 0,
+                    pageid: pageid,
+                    text: newContent,
+                    summary: '[[User:Elli/OneClickArchiver|OneClickArchiver]] updating counter.'
+                });
+            }
+        }
+    }
+}
+
+
+function parseClueBotIIIConfig(pageText){
+    const templateName = "User:ClueBot III/ArchiveThis";
+    const content = findTemplateInPage(pageText, templateName);
+    if (!content) return;
+    const config = parseTemplateParams(content);
+    // params we care about:
+    /// necessary params
+    // archiveprefix - page name for archives, excluding the format string
+    // format - argument to PHP's date() function and/or "%%i" for numbered
+    /// optional params
+    // header - text to put at the top of new archives. default "{{Archive}}"
+    // counter - value for %%i
+    // headerlevel - header level of sections. default 2
+    // maxarchsize - max size before rolling over to new archive. in bytes only.
+
+    return new archiveBotConfigClueBotIII(config.archiveprefix, config.format, config.header, config.counter, config.headerlevel, config.maxarchsize, templateName, pageText)
+}
+
+const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig];
 
 $( document ).ready( async function () {
 	if ( determinePageArchivability() ) {
@@ -469,7 +692,13 @@ $( document ).ready( async function () {
 			
 			const content0 = response0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
 
-            const archiveConfig = parseMiszaBotConfig(content0);
+            var archiveConfig;
+            for (const configLoader of archiveConfigsToTry){
+                archiveConfig = configLoader(content0);
+            console.log(archiveConfig);
+                if (archiveConfig) break;
+            }
+//            const archiveConfig = parseMiszaBotConfig(content0);
 
             const currentArchiveName = archiveConfig.getCurrentArchiveName();
 
