@@ -110,7 +110,7 @@ function parseTemplateParamsRaw(inputTemplateString) {
     return params; // these still have whitespace
 }
 
-function parseTemplateParams(inputTemplateString) {
+function parseTemplateParams(inputTemplateString, dontStripWhitespace) {
     const params = parseTemplateParamsRaw(inputTemplateString);
 
     // strip whitespace
@@ -119,7 +119,8 @@ function parseTemplateParams(inputTemplateString) {
         const eqIndex = param.indexOf('=');
         if (eqIndex !== -1) {
             const key = param.substring(0, eqIndex).trim();
-            const value = param.substring(eqIndex + 1).trim();
+            const valueBase = param.substring(eqIndex + 1);
+            const value = dontStripWhitespace ? valueBase.replace(/^[\r\n]+|[\r\n]+$/g, '') : valueBase.trim();
             if (key) {
                 result[key] = value;
             }
@@ -158,7 +159,6 @@ function updateTemplateParamInPage(pageText, templateName, targetKey, newValue){
     // if we didn't find the key, we append it
     if (!keyFound) {
         updatedParams.push(`${targetKey} = ${newValue}\n`);
-        console.log(updatedParams);
     }
 
     // rebuild template and substitute it in
@@ -212,7 +212,6 @@ async function doesTagExist(tagName) {
             tgcontinue: tagName,
             tglimit: 1
         });
-        console.log(response)
 
         const tags = response.query?.tags;
 
@@ -732,7 +731,7 @@ function parseClueBotIIIConfig(pageText){
     const templateName = "User:ClueBot III/ArchiveThis";
     const content = findTemplateInPage(pageText, templateName);
     if (!content) return;
-    const config = parseTemplateParams(content);
+    const config = parseTemplateParams(content, true);
     // params we care about:
     /// necessary params
     // archiveprefix - page name for archives, excluding the format string
@@ -869,7 +868,6 @@ async function loadOCA(){
     if (await OCATagExistsPromise){
         OCATagIfAvailable = 'OneClickArchiver';
     }
-    console.log(OCATagIfAvailable);
 
     OCALoading = `${ui_str.oca_loading_adding_archive_links}<br />\n`;
     addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, initialArchiveName, archiveConfig);
