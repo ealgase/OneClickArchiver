@@ -168,6 +168,7 @@ function updateTemplateParamInPage(pageText, templateName, targetKey, newValue){
 
 mw.loader.using(['mediawiki.util', 'mediawiki.api'], async function() {
 
+var OCATagIfAvailable;
 var config = mw.config.get([
 	'debug',
 	'wgAction',
@@ -200,6 +201,31 @@ function determinePageArchivability(){
     if (document.querySelector( '#ca-addsection' )) return true; // only present on talkpages
     OCAStatus = ui_str.oca_status_disabled_nottalk;
     return false // fallback
+}
+
+async function doesTagExist(tagName) {
+    try {
+        const response = await new mw.Api().get({
+            action: 'query',
+            list: 'tags',
+            tgprop: 'active|source',
+            tgcontinue: tagName,
+            tglimit: 1
+        });
+        console.log(response)
+
+        const tags = response.query?.tags;
+
+        if (tags && tags.length > 0 && tags[0].name === tagName) {
+            const targetTag = tags[0];
+            
+            return targetTag.active !== undefined && targetTag.source.includes('manual');
+        }
+        
+        return false;
+    } catch (error) {
+        return false;
+    }
 }
 
 async function archiveThis(sectionNumber, archiveName, currentArchiveName, sectionName, archiveConfig) {
@@ -272,7 +298,8 @@ async function archiveThis(sectionNumber, archiveName, currentArchiveName, secti
         action: 'edit',
         title: archiveName,
         appendtext: sectionContent,
-        summary: `/* ${sectionName} */ ${ui_str.archivethis_es_archived_using}`
+        summary: `/* ${sectionName} */ ${ui_str.archivethis_es_archived_using}`,
+        tags: OCATagIfAvailable
     });
     
     printMessage(ui_str.archivethis_successfully_added, "green");
@@ -281,7 +308,8 @@ async function archiveThis(sectionNumber, archiveName, currentArchiveName, secti
         section: sectionNumber,
         pageid: pageid,
         text: '',
-        summary: `[[User:Elli/OneClickArchiver|OneClickArchived]] "${sectionName}" ${ui_str.archivethis_es_to} [[${archiveName}]]`
+        summary: `[[User:Elli/OneClickArchiver|OneClickArchived]] "${sectionName}" ${ui_str.archivethis_es_to} [[${archiveName}]]`,
+        tags: OCATagIfAvailable
     })
     printMessage(ui_str.archivethis_success, "green");
     await archiveConfig.updateConfigIfNeeded(pageid);
@@ -459,7 +487,8 @@ class archiveBotConfigMisza extends archiveBotConfig{
                 section: 0,
                 pageid: pageid,
                 text: newContent,
-                summary: '[[User:Elli/OneClickArchiver|OneClickArchiver]] updating counter.'
+                summary: '[[User:Elli/OneClickArchiver|OneClickArchiver]] updating counter.',
+                tags: OCATagIfAvailable
             });
         }
     }
@@ -722,7 +751,7 @@ const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig, parseAr
 function OCAInfo(){
     const OCAInfoMsg = document.createElement('p');
     OCAInfoMsg.innerHTML = `<b>${OCALoading}</b>${OCAStatus}`;
-    mw.notify(OCAInfoMsg, { title: 'OneClickArchiver status', tag: 'OCAstatus', autoHide: false });
+    mw.notify(OCAInfoMsg, { title: oca_status_heading, tag: 'OCAstatus', autoHide: false });
 }
 
 async function getPageSizeInfo(pageName, headerLevel){
@@ -765,6 +794,8 @@ async function getPageSizeInfo(pageName, headerLevel){
 }
 
 async function loadOCA(){
+    OCATagExistsPromise = doesTagExist('OneClickArchiver'); // we don't need to wait for this now
+
     OCALoading = `${ui_str.oca_loading_init}<br />`;
     if (mw.config.get( 'wgNamespaceNumber' ) > 0){ // don't waste space on pages in mainspace
 		const OCAInfoButton = mw.util.addPortletLink(
@@ -829,6 +860,12 @@ async function loadOCA(){
         }
 
         const archivePageToWrite = archiveNameCurrent;
+
+        // make sure we know whether we can use a tag before we add the archive links
+        if (await OCATagExistsPromise){
+            OCATagIfAvailable = 'OneClickArchiver';
+        }
+        console.log(OCATagIfAvailable);
 
         OCALoading = `${ui_str.oca_loading_adding_archive_links}<br />\n`;
         addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, initialArchiveName, archiveConfig);
