@@ -751,7 +751,7 @@ const archiveConfigsToTry = [parseMiszaBotConfig, parseClueBotIIIConfig, parseAr
 function OCAInfo(){
     const OCAInfoMsg = document.createElement('p');
     OCAInfoMsg.innerHTML = `<b>${OCALoading}</b>${OCAStatus}`;
-    mw.notify(OCAInfoMsg, { title: oca_status_heading, tag: 'OCAstatus', autoHide: false });
+    mw.notify(OCAInfoMsg, { title: ui_str.oca_status_heading, tag: 'OCAstatus', autoHide: false });
 }
 
 async function getPageSizeInfo(pageName, headerLevel){
@@ -812,66 +812,68 @@ async function loadOCA(){
         });
     }
 
-	if ( determinePageArchivability() ) {
-		var pageid = config.wgArticleId;
-		const pageSection0 = await new mw.Api().get( {
-			action: 'query',
-			prop: [ 'revisions', 'info' ],
-			rvsection: 0,
-			rvprop: 'content',
-			pageids: pageid,
-			indexpageids: 1,
-			rawcontinue: ''
-		})
-        
-        const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
-
-        OCALoading = `${ui_str.oca_loading_looking_for_config}<br />\n`;
-        var archiveConfig;
-        for (const configLoader of archiveConfigsToTry){
-            archiveConfig = configLoader(content0);
-            if (archiveConfig){
-                const templateQualifiedName = archiveConfig.templateName.includes(":") ? archiveConfig.templateName : "Template:" + archiveConfig.templateName;
-                OCAStatus = OCAStatus + `\n${ui_str.oca_status_using_template} {{<a href="/wiki/${templateQualifiedName}">${archiveConfig.templateName}</a>}}.`;
-                break;
-            }
-        }
-        if (!archiveConfig){ // no valid config
-            OCAStatus = ui_str.oca_status_no_config;
-            OCALoading = "";
-            return;
-        }
-
-        const initialArchiveName = archiveConfig.getCurrentArchiveName();
-
-        OCALoading = `${ui_str.oca_loading_looking_for_archive}<br />\n`;
-        // we can't rely on the counter being the actual archive number
-        // for one, it could just be absent or inaccurate
-        // also, ClueBot style bots don't use it in the same way
-        // they only use it for the first page to try, and *don't* increment it automatically
-        var archiveNameLast;
-        var archiveNameCurrent = initialArchiveName;
-        var counterExtra = 0;
-        while (archiveNameLast !== archiveNameCurrent){
-            archiveNameLast = archiveNameCurrent;
-            const [ currentArchiveBytes, currentArchiveSections ] = await getPageSizeInfo(archiveNameLast, archiveConfig.headerLevel);
-            archiveNameCurrent = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra);
-            counterExtra++;
-        }
-
-        const archivePageToWrite = archiveNameCurrent;
-
-        // make sure we know whether we can use a tag before we add the archive links
-        if (await OCATagExistsPromise){
-            OCATagIfAvailable = 'OneClickArchiver';
-        }
-        console.log(OCATagIfAvailable);
-
-        OCALoading = `${ui_str.oca_loading_adding_archive_links}<br />\n`;
-        addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, initialArchiveName, archiveConfig);
+    if (!determinePageArchivability()){
         OCALoading = "";
+        return;
+    }
 
-	}
+    var pageid = config.wgArticleId;
+    const pageSection0 = await new mw.Api().get( {
+        action: 'query',
+        prop: [ 'revisions', 'info' ],
+        rvsection: 0,
+        rvprop: 'content',
+        pageids: pageid,
+        indexpageids: 1,
+        rawcontinue: ''
+    })
+    
+    const content0 = pageSection0.query.pages[ pageid ].revisions[ 0 ][ '*' ];
+
+    OCALoading = `${ui_str.oca_loading_looking_for_config}<br />\n`;
+    var archiveConfig;
+    for (const configLoader of archiveConfigsToTry){
+        archiveConfig = configLoader(content0);
+        if (archiveConfig){
+            const templateQualifiedName = archiveConfig.templateName.includes(":") ? archiveConfig.templateName : "Template:" + archiveConfig.templateName;
+            OCAStatus = OCAStatus + `\n${ui_str.oca_status_using_template} {{<a href="/wiki/${templateQualifiedName}">${archiveConfig.templateName}</a>}}.`;
+            break;
+        }
+    }
+    if (!archiveConfig){ // no valid config
+        OCAStatus = ui_str.oca_status_no_config;
+        OCALoading = "";
+        return;
+    }
+
+    const initialArchiveName = archiveConfig.getCurrentArchiveName();
+
+    OCALoading = `${ui_str.oca_loading_looking_for_archive}<br />\n`;
+    // we can't rely on the counter being the actual archive number
+    // for one, it could just be absent or inaccurate
+    // also, ClueBot style bots don't use it in the same way
+    // they only use it for the first page to try, and *don't* increment it automatically
+    var archiveNameLast;
+    var archiveNameCurrent = initialArchiveName;
+    var counterExtra = 0;
+    while (archiveNameLast !== archiveNameCurrent){
+        archiveNameLast = archiveNameCurrent;
+        const [ currentArchiveBytes, currentArchiveSections ] = await getPageSizeInfo(archiveNameLast, archiveConfig.headerLevel);
+        archiveNameCurrent = archiveConfig.getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra);
+        counterExtra++;
+    }
+
+    const archivePageToWrite = archiveNameCurrent;
+
+    // make sure we know whether we can use a tag before we add the archive links
+    if (await OCATagExistsPromise){
+        OCATagIfAvailable = 'OneClickArchiver';
+    }
+    console.log(OCATagIfAvailable);
+
+    OCALoading = `${ui_str.oca_loading_adding_archive_links}<br />\n`;
+    addArchiveLinks(archiveConfig.headerLevel, archivePageToWrite, initialArchiveName, archiveConfig);
+    OCALoading = "";
 }
 
 
