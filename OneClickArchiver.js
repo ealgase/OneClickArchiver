@@ -359,7 +359,7 @@ function addArchiveLinks(headerLevel, archiveName, currentArchiveName, archiveCo
 // this is an abstract class -- need to implement details for each type of bot config
 class archiveBotConfig{
     constructor(counter, archivePageHeader, headerLevel){
-        this.counter = counter;
+        this.counter = parseInt(counter);
         if (!counter) this.counter = 1;
         this.archivePageHeader = archivePageHeader;
         this.headerLevel = headerLevel;
@@ -466,7 +466,7 @@ class archiveBotConfigMisza extends archiveBotConfig{
     }
 
     getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra){
-        this.toWriteCounter = parseInt(this.counter) + counterExtra;
+        this.toWriteCounter = this.counter + counterExtra;
         if (this.archiveSizeLimitType === "threads" ){
             if (currentArchiveSections >= this.archiveSizeThreadLimit){
                 this.toWriteCounter++;
@@ -707,12 +707,12 @@ class archiveBotConfigClueBotIII extends archiveBotConfig{
     }
 
     getCurrentArchiveName(){ // for getting the CURRENT archive -- this doesn't require any HTTP request; just string substitution
-        const archiveSuffix = this._renderPHPDateString(this.format, parseInt(this.counter));
+        const archiveSuffix = this._renderPHPDateString(this.format, this.counter);
         return this.archiveprefix + archiveSuffix;
     }
 
     getArchiveNameToWrite(currentArchiveBytes, currentArchiveSections, counterExtra){ // for getting the archive we are actually going to write to. this requires details from the current archive
-        var toWriteCounter = parseInt(this.counter) + counterExtra;
+        var toWriteCounter = this.counter + counterExtra;
         if (this.format.includes('%%i')){
             if (currentArchiveBytes >= this.maxarchsize){
                 toWriteCounter++;
