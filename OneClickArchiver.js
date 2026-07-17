@@ -706,7 +706,7 @@ class archiveBotConfigClueBotIII extends archiveBotConfig{
     }
 
     getCurrentArchiveName(){ // for getting the CURRENT archive -- this doesn't require any HTTP request; just string substitution
-        const archiveSuffix = this._renderPHPDateString(this.format, this.counter);
+        const archiveSuffix = this._renderPHPDateString(this.format, parseInt(this.counter));
         return this.archiveprefix + archiveSuffix;
     }
 
