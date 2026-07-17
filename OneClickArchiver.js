@@ -445,6 +445,7 @@ class archiveBotConfigMisza extends archiveBotConfig{
 
     constructor(counter, archiveheader, archive, maxarchivesize, templateName, pageText){
         const headerLevel = 2; // MiszaBot doesn't support custom headerlevels
+        if (!archiveheader) archiveheader="{{Archive}}"; // default
         super(counter, archiveheader, headerLevel);
         this.pageText = pageText;
         this.templateName = templateName;
